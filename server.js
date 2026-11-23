@@ -11,6 +11,7 @@ const DATA_DIR = process.env.LAUNCHSCOUT_DATA_DIR || path.join(__dirname, 'data'
 const DATA_FILE = path.join(DATA_DIR, 'launchscout.json');
 const DIST_DIR = path.join(__dirname, 'dist');
 const VERSION = '2.0.0';
+const ADMIN_KEY = process.env.LAUNCHSCOUT_ADMIN_KEY || '';
 
 function ensureStore() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -46,7 +47,15 @@ function bearer(req) {
   const value = req.headers.authorization || '';
   return value.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
-function authorized(req, store) { return Boolean(store.tokenHash && bearer(req) && crypto.timingSafeEqual(Buffer.from(tokenHash(bearer(req))), Buffer.from(store.tokenHash))); }
+function safeEqual(left, right) {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+}
+function authorized(req, store) { return Boolean(store.tokenHash && safeEqual(tokenHash(bearer(req)), store.tokenHash)); }
+function adminAuthorized(req) { return Boolean(ADMIN_KEY && safeEqual(req.headers['x-launchscout-admin-key'], ADMIN_KEY)); }
+function managementAuthorized(req, store) { return authorized(req, store) || adminAuthorized(req); }
+function authError(res, status, code, message) { return json(res, status, { ok: false, error: { code, message } }); }
 async function body(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -110,7 +119,7 @@ function callTool(store, name, args) {
 async function handleMcp(req, res, store) {
   if (req.method === 'GET') return json(res, 200, { status: 'ok', service: 'LaunchScout Unified MCP', version: VERSION, endpoint: '/api/mcp', authentication: 'Bearer token required for POST' });
   if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
-  if (!authorized(req, store)) return json(res, 401, { error: 'unauthorized', message: 'Bearer token inválido ou ausente.' });
+  if (!authorized(req, store)) return authError(res, 401, 'unauthorized', 'Bearer token inválido ou ausente.');
   let payload; try { payload = await body(req); } catch { return json(res, 400, { error: 'invalid_json' }); }
   const id = payload.id ?? null; const method = String(payload.method || ''); const params = payload.params || {};
   if (method === 'initialize') return json(res, 200, rpcResult(id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'LaunchScout Unified MCP', version: VERSION } }));
@@ -139,12 +148,16 @@ const server = http.createServer(async (req, res) => {
   const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
   const store = readStore();
   if (pathname === '/api/mcp') return handleMcp(req, res, store);
-  if (pathname === '/api/auth/status' && req.method === 'GET') return json(res, 200, { configured: Boolean(store.tokenHash), createdAt: store.tokenCreatedAt || null });
+  if (pathname === '/api/auth/status' && req.method === 'GET') return json(res, 200, { ok: true, configured: Boolean(store.tokenHash), createdAt: store.tokenCreatedAt || null, recoveryConfigured: Boolean(ADMIN_KEY) });
   if (pathname === '/api/auth/generate' && req.method === 'POST') {
-    if (store.tokenHash && !authorized(req, store)) return json(res, 401, { error: 'unauthorized', message: 'Já existe um token configurado. Informe o token atual ou remova o arquivo de dados para fazer o bootstrap novamente.' });
+    if (store.tokenHash && !managementAuthorized(req, store)) return authError(res, 401, 'management_auth_required', 'Já existe um token. Informe o token atual ou a chave administrativa de recuperação.');
     const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, warning: 'Copie agora. O token não será exibido novamente.' });
   }
-  if (pathname === '/api/auth/revoke' && req.method === 'POST') { if (!authorized(req, store)) return json(res, 401, { error: 'unauthorized' }); store.tokenHash = ''; store.tokenCreatedAt = ''; writeStore(store); return json(res, 200, { revoked: true }); }
+  if (pathname === '/api/auth/recover' && req.method === 'POST') {
+    if (!adminAuthorized(req)) return authError(res, 403, 'admin_recovery_required', 'Configure LAUNCHSCOUT_ADMIN_KEY e informe a chave administrativa para recuperar o acesso.');
+    const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, warning: 'Recuperação concluída. Copie o token agora.' });
+  }
+  if (pathname === '/api/auth/revoke' && req.method === 'POST') { if (!managementAuthorized(req, store)) return authError(res, 401, 'management_auth_required', 'Informe o Bearer token atual ou a chave administrativa.'); store.tokenHash = ''; store.tokenCreatedAt = ''; writeStore(store); return json(res, 200, { ok: true, revoked: true }); }
   return serveStatic(req, res);
 });
 server.listen(PORT, HOST, () => console.log(`LaunchScout Unified running on http://${HOST}:${PORT}`));

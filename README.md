@@ -17,6 +17,8 @@ O build de produção é gerado com `npm run build` em `dist/`.
 
 No Hostinger, execute `npm ci && npm run start:production` no ambiente Node. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `data/launchscout.json`, que deve ficar fora do Git e ser incluído no backup do servidor.
 
+Requisito: Node.js 20.19 ou superior.
+
 Variáveis opcionais:
 
 ```bash
@@ -31,6 +33,21 @@ Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta
 ## MCP
 
 Abra **Configurações MCP** para gerar o token diretamente no LaunchScout Core. O token é armazenado no servidor apenas como hash SHA-256 e é exibido uma única vez. O agente primário usa automaticamente o endpoint relativo `/api/mcp`, eliminando conflito de endpoint. Agentes externos adicionais ainda podem ser configurados quando necessário; cada agente possui nome, função, endpoint e token próprios.
+
+### Ciclo de vida do token
+
+- **Primeira geração:** quando não existe token, use **Gerar ou renovar token interno**.
+- **Renovação:** informe o token atual e gere outro; o anterior é invalidado imediatamente.
+- **Revogação:** use **Revogar token interno**; chamadas MCP deixam de funcionar na hora.
+- **Recuperação:** configure `LAUNCHSCOUT_ADMIN_KEY` no Hostinger e informe essa chave no campo administrativo da interface. A recuperação não exige apagar `data/launchscout.json`.
+
+Exemplo de configuração segura no ambiente do servidor:
+
+```bash
+LAUNCHSCOUT_ADMIN_KEY=uma-chave-administrativa-forte-e-fora-do-repositorio
+```
+
+A chave administrativa nunca deve ser colocada no código, no Git, no ZIP ou em screenshots. Ela só é enviada pelo navegador quando o operador escolhe explicitamente a recuperação/renovação administrativa.
 
 O LaunchScout chama `initialize` para testar a conexão e `tools/call` com `search_launches` para pesquisar. O endpoint interno compartilha exatamente o mesmo armazenamento usado pelo radar.
 
