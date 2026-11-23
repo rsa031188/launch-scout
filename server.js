@@ -11,7 +11,6 @@ const DATA_DIR = process.env.LAUNCHSCOUT_DATA_DIR || path.join(__dirname, 'data'
 const DATA_FILE = path.join(DATA_DIR, 'launchscout.json');
 const DIST_DIR = path.join(__dirname, 'dist');
 const VERSION = '2.0.0';
-const ADMIN_KEY = process.env.LAUNCHSCOUT_ADMIN_KEY || '';
 
 function ensureStore() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -53,8 +52,6 @@ function safeEqual(left, right) {
   return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
 }
 function authorized(req, store) { return Boolean(store.tokenHash && safeEqual(tokenHash(bearer(req)), store.tokenHash)); }
-function adminAuthorized(req) { return Boolean(ADMIN_KEY && safeEqual(req.headers['x-launchscout-admin-key'], ADMIN_KEY)); }
-function managementAuthorized(req, store) { return authorized(req, store) || adminAuthorized(req); }
 function authError(res, status, code, message) { return json(res, status, { ok: false, error: { code, message } }); }
 async function body(req) {
   const chunks = [];
@@ -148,16 +145,14 @@ const server = http.createServer(async (req, res) => {
   const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
   const store = readStore();
   if (pathname === '/api/mcp') return handleMcp(req, res, store);
-  if (pathname === '/api/auth/status' && req.method === 'GET') return json(res, 200, { ok: true, configured: Boolean(store.tokenHash), createdAt: store.tokenCreatedAt || null, recoveryConfigured: Boolean(ADMIN_KEY) });
+  if (pathname === '/api/auth/status' && req.method === 'GET') return json(res, 200, { ok: true, configured: Boolean(store.tokenHash), createdAt: store.tokenCreatedAt || null, openGeneration: true });
   if (pathname === '/api/auth/generate' && req.method === 'POST') {
-    if (store.tokenHash && !managementAuthorized(req, store)) return authError(res, 401, 'management_auth_required', 'Já existe um token. Informe o token atual ou a chave administrativa de recuperação.');
-    const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, warning: 'Copie agora. O token não será exibido novamente.' });
+    const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, replaced: true, warning: 'A emissão aberta substituiu imediatamente o token anterior. Copie agora; ele não será exibido novamente.' });
   }
   if (pathname === '/api/auth/recover' && req.method === 'POST') {
-    if (!adminAuthorized(req)) return authError(res, 403, 'admin_recovery_required', 'Configure LAUNCHSCOUT_ADMIN_KEY e informe a chave administrativa para recuperar o acesso.');
-    const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, warning: 'Recuperação concluída. Copie o token agora.' });
+    const token = createToken(); store.tokenHash = tokenHash(token); store.tokenCreatedAt = new Date().toISOString(); writeStore(store); return json(res, 200, { token, createdAt: store.tokenCreatedAt, replaced: true, warning: 'Recuperação aberta concluída e token anterior substituído. Copie agora.' });
   }
-  if (pathname === '/api/auth/revoke' && req.method === 'POST') { if (!managementAuthorized(req, store)) return authError(res, 401, 'management_auth_required', 'Informe o Bearer token atual ou a chave administrativa.'); store.tokenHash = ''; store.tokenCreatedAt = ''; writeStore(store); return json(res, 200, { ok: true, revoked: true }); }
+  if (pathname === '/api/auth/revoke' && req.method === 'POST') { store.tokenHash = ''; store.tokenCreatedAt = ''; writeStore(store); return json(res, 200, { ok: true, revoked: true, openOperation: true }); }
   return serveStatic(req, res);
 });
 server.listen(PORT, HOST, () => console.log(`LaunchScout Unified running on http://${HOST}:${PORT}`));

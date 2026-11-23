@@ -64,15 +64,17 @@ A saída fica em `dist/`.
 
 Execute `npm ci && npm run start:production` no ambiente Node do Hostinger. O servidor entrega `dist/` e o MCP no mesmo domínio. Configure `LAUNCHSCOUT_DATA_DIR` para um diretório persistente e faça backup de `data/launchscout.json`.
 
-As credenciais não são gravadas no código-fonte. O token é gerado no servidor e salvo apenas como hash; ele é exibido uma única vez e o navegador mantém a cópia necessária para chamadas autenticadas.
+As credenciais não são gravadas no código-fonte. O token é gerado no servidor e salvo apenas como hash; ele é exibido uma única vez e o navegador mantém a cópia necessária para chamadas autenticadas. A emissão/renovação é aberta e substitui automaticamente o token anterior.
 
 ## 6. Configuração MCP
 
 1. Abra **Configurações MCP** na barra lateral.
-2. Clique em **Gerar token no LaunchScout Core** para criar o token interno, ou em **Adicionar agente** para uma fonte externa.
+2. Clique em **Gerar ou renovar token interno** para criar ou substituir o token interno, ou em **Adicionar agente** para uma fonte externa.
 3. Confirme o endpoint interno `/api/mcp` e o papel do agente.
 4. Salve a conexão.
 5. Use **Testar agora** e depois **Buscar novidades**.
+
+Os endpoints `POST /api/auth/generate` e `POST /api/auth/revoke` são operações abertas nesta instalação privada. Cada emissão invalida imediatamente o token anterior; a revogação limpa a credencial sem exigir token vigente. Por serem operações abertas, a aplicação deve ser publicada somente com HTTPS e mantida restrita ao ambiente privado do proprietário.
 
 Para uma instalação externa, o endpoint precisa:
 

@@ -37,17 +37,17 @@ Abra **Configurações MCP** para gerar o token diretamente no LaunchScout Core.
 ### Ciclo de vida do token
 
 - **Primeira geração:** quando não existe token, use **Gerar ou renovar token interno**.
-- **Renovação:** informe o token atual e gere outro; o anterior é invalidado imediatamente.
-- **Revogação:** use **Revogar token interno**; chamadas MCP deixam de funcionar na hora.
-- **Recuperação:** configure `LAUNCHSCOUT_ADMIN_KEY` no Hostinger e informe essa chave no campo administrativo da interface. A recuperação não exige apagar `data/launchscout.json`.
+- **Emissão aberta/renovação:** use **Gerar ou renovar token interno**. A operação pode ser executada sem chave administrativa e substitui imediatamente o token anterior; se o token atual estiver disponível, ele é enviado para registrar a rotação autenticada.
+- **Revogação:** use **Revogar token interno**; a operação é aberta nesta instalação privada e chamadas MCP deixam de funcionar na hora.
+- **Recuperação:** se o token foi perdido, gere um novo diretamente. A operação não exige apagar `data/launchscout.json`.
 
-Exemplo de configuração segura no ambiente do servidor:
+O endpoint de emissão aberta é:
 
-```bash
-LAUNCHSCOUT_ADMIN_KEY=uma-chave-administrativa-forte-e-fora-do-repositorio
+```text
+POST /api/auth/generate
 ```
 
-A chave administrativa nunca deve ser colocada no código, no Git, no ZIP ou em screenshots. Ela só é enviada pelo navegador quando o operador escolhe explicitamente a recuperação/renovação administrativa.
+O servidor retorna o token em texto puro somente nessa resposta. O arquivo `data/launchscout.json` armazena apenas o hash SHA-256. Como a emissão e a revogação são abertas, publique a aplicação apenas em HTTPS e mantenha o domínio, proxy ou ambiente de hospedagem restrito à sua operação privada.
 
 O LaunchScout chama `initialize` para testar a conexão e `tools/call` com `search_launches` para pesquisar. O endpoint interno compartilha exatamente o mesmo armazenamento usado pelo radar.
 
