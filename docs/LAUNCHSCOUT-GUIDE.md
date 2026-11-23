@@ -13,13 +13,13 @@ O nome **LaunchScout** substitui o nome usado no briefing original.
 - Busca textual por título, produtor, tipo, resumo e tags.
 - Filtros por tipo, período, produtor e interesse.
 - Ordenação por relevância, data mais próxima, descoberta recente e lista pessoal.
-- Favoritos persistidos no navegador.
-- Descoberta real via MCP com estado de carregamento e feedback visual.
+- Favoritos persistidos no backend por utilizador.
+- Descoberta real via endpoint autenticado, MCP e provedores RSS configurados, com estado de carregamento e feedback visual.
 - Estado vazio para combinações de filtros sem resultado.
 - Configuração de múltiplas conexões MCP com criação, edição, pausa, ativação e remoção.
 - Servidor Node unificado com endpoint `/api/mcp`, geração de token, persistência e ferramentas `search_launches`, `save_launch`, `get_launch_details` e `get_platform_statistics`.
 - Consulta multiagente via JSON-RPC `initialize` e `tools/call`, usando autorização Bearer e deduplicação de resultados.
-- Persistência de configurações e favoritos em `localStorage`.
+- `localStorage` é apenas cache visual; catálogo, favoritos, histórico, provedores e agentes vivem no armazenamento backend.
 - Interface responsiva para desktop, tablet e mobile.
 
 ## 3. Estrutura do projeto
@@ -64,7 +64,7 @@ A saída fica em `dist/`.
 
 Execute `npm ci && npm run start:production` no ambiente Node do Hostinger. O servidor entrega `dist/` e o MCP no mesmo domínio. Configure `LAUNCHSCOUT_DATA_DIR` para um diretório persistente e faça backup de `data/launchscout.json`.
 
-As credenciais não são gravadas no código-fonte. O token é gerado no servidor e salvo apenas como hash; ele é exibido uma única vez e o navegador mantém a cópia necessária para chamadas autenticadas. A emissão/renovação é aberta e substitui automaticamente o token anterior.
+As credenciais não são gravadas no código-fonte. O token é gerado no servidor, cifrado com AES-256-GCM e comparado através de hash; ele é exibido uma única vez. Geração, recuperação e revogação exigem sessão administrativa e CSRF.
 
 ## 6. Configuração MCP
 
@@ -74,7 +74,13 @@ As credenciais não são gravadas no código-fonte. O token é gerado no servido
 4. Salve a conexão.
 5. Use **Testar agora** e depois **Buscar novidades**.
 
-Os endpoints `POST /api/auth/generate` e `POST /api/auth/revoke` são operações abertas nesta instalação privada. Cada emissão invalida imediatamente o token anterior; a revogação limpa a credencial sem exigir token vigente. Por serem operações abertas, a aplicação deve ser publicada somente com HTTPS e mantida restrita ao ambiente privado do proprietário.
+Os endpoints `POST /api/auth/generate`, `POST /api/auth/recover` e `POST /api/auth/revoke` exigem sessão administrativa. Cada emissão invalida imediatamente o token anterior; a aplicação deve ser publicada somente com HTTPS.
+
+## 7. Pesquisa externa
+
+Administradores podem criar provedores RSS através de `POST /api/admin/providers`, com nome, URL pública, categoria e idioma. O servidor resolve o hostname e rejeita loopback, redes privadas, link-local, metadados e URLs com credenciais. Cada execução aplica timeout, limite de resposta, deduplicação e preserva a fonte original. Sem provedor configurado, o sistema informa `not_configured` e não inventa resultados.
+
+Os endpoints `GET /api/admin/providers`, `POST /api/admin/providers`, `GET /api/admin/agents` e `POST /api/admin/agents` permitem gerir a base operacional. A interface administrativa dedicada para estes recursos permanece em implementação.
 
 Para uma instalação externa, o endpoint precisa:
 

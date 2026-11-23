@@ -21,6 +21,9 @@ const icon = (name, size = 18) => {
 
 const INTERNAL_MCP_ENDPOINT = `${window.location.origin}/api/mcp`;
 const state = {
+  auth: null,
+  csrfToken: '',
+  authError: '',
   launches: JSON.parse(localStorage.getItem('launchscout-launches') || 'null') || [],
   query: '',
   eventName: '',
@@ -55,6 +58,7 @@ if (!Array.isArray(state.config.connections)) {
   }];
 }
 state.config.connections = state.config.connections.map((connection) => (connection.endpoint?.includes('mcp.launchscout.local') || connection.endpoint?.includes('sculpted-orange-giraffe-25.hostingersite.com')) ? { ...connection, endpoint: INTERNAL_MCP_ENDPOINT, token: '', name: connection.id === 'primary' ? 'LaunchScout Core' : connection.name } : connection);
+state.config.connections = state.config.connections.map((connection) => ({ ...connection, token: '' }));
 const activeConnections = () => state.config.connections.filter((connection) => connection.connected && connection.endpoint);
 const activeConnection = () => activeConnections()[0] || state.config.connections[0];
 state.launches = state.launches.filter((item) => !String(item.registration || '').includes('example.com') && item.source !== 'demo.launchscout');
@@ -62,7 +66,7 @@ state.launches = state.launches.filter((item) => !String(item.registration || ''
 const app = document.querySelector('#app');
 const saveState = () => {
   localStorage.setItem('launchscout-launches', JSON.stringify(state.launches));
-  localStorage.setItem('launchscout-config', JSON.stringify(state.config));
+  localStorage.setItem('launchscout-config', JSON.stringify({ ...state.config, connections: state.config.connections.map((connection) => ({ ...connection, token: '' })) }));
 };
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
 const formatDate = (value, compact = false) => new Intl.DateTimeFormat('pt-BR', compact ? { day: '2-digit', month: 'short' } : { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)).replace('.', '');
@@ -189,10 +193,15 @@ function renderSettingsModal() {
   const tokenControls = isCore ? `<div class="token-actions"><button type="button" class="ghost-button token-button" data-action="generate-token" ${state.tokenGenerating ? 'disabled' : ''}>${icon('spark', 14)} ${state.tokenGenerating ? 'Gerando token...' : currentToken ? 'Gerar novo token e substituir' : 'Gerar token interno'}</button>${currentToken ? `<button type="button" class="ghost-button token-button" data-action="copy-stored-token">Copiar token para o agente</button>` : ''}<button type="button" class="danger-button token-button" data-action="revoke-token">Revogar token interno</button></div>` : '<div class="settings-note external-token-note">Credencial exclusiva deste agente externo. Ela não altera o LaunchScout Core.</div>';
   const adminRecovery = isCore ? '<div class="settings-note open-token-note">A emissão do token é aberta: gerar um novo token substitui imediatamente o token anterior. Use esta operação somente quando quiser fazer a rotação da credencial.</div>' : '';
   const tokenNotice = isCore && state.tokenNotice ? `<div class="token-reveal"><strong>Novo token gerado — copie para o agente</strong><code>${esc(state.tokenNotice)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token</button><small>O navegador mantém este token até você gerar outro ou revogá-lo.</small></div>` : '';
-  return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div><form class="settings-form" data-form="settings"><label>Nome do agente<input name="agentName" value="${esc(currentName)}" placeholder="Agente de descoberta" required /></label><label>Função do agente<input name="role" value="${esc(currentRole)}" placeholder="Catálogo, eventos, produtos..." required /></label><label>Endpoint MCP<input name="endpoint" value="${esc(currentEndpoint)}" placeholder="/api/mcp" required /></label><label>Token de acesso <span class="label-note">hash salvo no servidor; exibido apenas uma vez</span><input name="token" type="password" value="${esc(currentToken)}" placeholder="${isCore ? 'Gere um token abaixo' : 'Token do agente externo'}" autocomplete="off" />${tokenControls}</label>${adminRecovery}${tokenNotice}<div class="settings-note">${icon('link', 15)} <span>A busca chama <strong>todos os agentes habilitados em paralelo</strong>. O token interno é gerado por este Node e o endpoint padrão é <strong>/api/mcp</strong>.</span></div><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-settings">Cancelar</button><button type="submit" class="primary-button">${icon('check', 15)} ${editing ? 'Salvar alterações' : 'Criar agente'}</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="provider-panel"><div class="list-heading"><span>Pesquisa externa</span><span class="label-note">RSS público, validado contra SSRF</span></div><form class="provider-form" data-form="provider"><input name="name" placeholder="Nome da fonte" required /><input name="url" type="url" placeholder="https://exemplo.org/feed.xml" required /><button class="ghost-button" type="submit">Adicionar fonte</button></form><small class="provider-help">Sem provedor configurado, o radar não inventa resultados.</small></div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div><form class="settings-form" data-form="settings"><label>Nome do agente<input name="agentName" value="${esc(currentName)}" placeholder="Agente de descoberta" required /></label><label>Função do agente<input name="role" value="${esc(currentRole)}" placeholder="Catálogo, eventos, produtos..." required /></label><label>Endpoint MCP<input name="endpoint" value="${esc(currentEndpoint)}" placeholder="/api/mcp" required /></label><label>Token de acesso <span class="label-note">hash salvo no servidor; exibido apenas uma vez</span><input name="token" type="password" value="${esc(currentToken)}" placeholder="${isCore ? 'Gere um token abaixo' : 'Token do agente externo'}" autocomplete="off" />${tokenControls}</label>${adminRecovery}${tokenNotice}<div class="settings-note">${icon('link', 15)} <span>A busca chama <strong>todos os agentes habilitados em paralelo</strong>. O token interno é gerado por este Node e o endpoint padrão é <strong>/api/mcp</strong>.</span></div><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-settings">Cancelar</button><button type="submit" class="primary-button">${icon('check', 15)} ${editing ? 'Salvar alterações' : 'Criar agente'}</button></div></form></section></div>`;
+}
+
+function renderAuth() {
+  return `<main class="auth-screen"><section class="auth-panel"><div class="brand-lockup"><div class="brand-mark">${icon('radar', 24)}</div><div><div class="brand-name">LaunchScout</div><div class="brand-kicker">personal launch radar</div></div></div><div class="eyebrow lime">ACESSO PROTEGIDO</div><h1>Entre no seu radar.</h1><p>A área de administração e as credenciais MCP ficam disponíveis apenas após autenticação.</p><form class="auth-form" data-form="login"><label>E-mail<input name="email" type="email" autocomplete="username" required placeholder="admin@exemplo.com" /></label><label>Password<input name="password" type="password" autocomplete="current-password" required placeholder="A sua password" /></label>${state.authError ? `<div class="auth-error">${esc(state.authError)}</div>` : ''}<button class="primary-button" type="submit">${icon('arrow', 15)} Iniciar sessão</button></form><small class="auth-footnote">O primeiro administrador deve ser criado através do procedimento de bootstrap configurado no servidor.</small></section></main>`;
 }
 
 function renderApp() {
+  if (!state.auth) { app.innerHTML = renderAuth(); return; }
   if (state.view === 'saved') {
     app.innerHTML = `<div class="app-shell">${renderSidebar()}<main class="main-content">${renderSavedView()}</main>${renderSettingsModal()}<div class="toast-region" aria-live="polite"></div></div>`;
     return;
@@ -217,7 +226,19 @@ function toast(message, tone = 'default') {
 
 async function parseJsonResponse(response) {
   const raw = await response.text();
-  try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error(`O servidor retornou uma resposta que não é JSON válido (HTTP ${response.status}). Execute o LaunchScout com npm run dev ou npm start, não com vite preview isolado.`); }
+  try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error(`A aplicação Node da Hostinger não devolveu JSON válido (HTTP ${response.status}). Confirme que o arranque usa server.js ou npm run start:production, e não apenas vite preview.`); }
+}
+
+async function hydrateCatalog() {
+  if (!state.auth) return;
+  try {
+    const response = await fetch('/api/catalog?limit=100');
+    const payload = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível carregar o catálogo.');
+    state.launches = (payload.items || []).map((item, index) => normalizeMcpItem(item, index, { endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean).map((item, index) => ({ ...item, saved: Boolean(payload.items[index]?.saved), status: payload.items[index]?.verification === 'confirmed' ? 'confirmed' : item.status }));
+    saveState();
+    renderApp();
+  } catch (error) { toast(`Catálogo não sincronizado: ${error.message}`); }
 }
 
 async function callMcp(connection, method, params = {}) {
@@ -266,6 +287,25 @@ async function runDiscovery() {
   const button = document.querySelector('[data-action="discover"]');
   if (button) { button.disabled = true; button.innerHTML = `${icon('radar', 16)} Escaneando...`; }
   toast('Escaneando fontes conectadas…');
+  if (state.auth) {
+    try {
+      const localResponse = await fetch('/api/search/discover', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ query: state.query || undefined, event_name: state.eventName || undefined, category: state.type !== 'Todos' ? state.type : undefined, limit: state.searchLimit }) });
+      const localPayload = await parseJsonResponse(localResponse);
+      if (localResponse.ok) {
+        const localItems = (localPayload.items || []).map((item, index) => normalizeMcpItem(item, index, { endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean);
+        if (localItems.length) state.launches = [...localItems, ...state.launches.filter((old) => !localItems.some((item) => item.title === old.title && item.date === old.date))];
+        state.lastSync = 'agora mesmo';
+        localStorage.setItem('launchscout-last-sync', state.lastSync);
+        saveState();
+        renderApp();
+        const sourceCount = (localPayload.sources || []).length;
+        toast(localItems.length ? `${localItems.length} sinais recebidos de ${sourceCount} fonte(s) configurada(s).` : (localPayload.provider_status === 'not_configured' ? 'Nenhum provedor externo está configurado.' : 'Nenhum resultado verificável encontrado.'), localItems.length ? 'success' : 'default');
+        return;
+      }
+    } catch (error) {
+      toast(`Pesquisa externa falhou: ${error.message}`);
+    }
+  }
   const connectedSources = activeConnections();
   if (!connectedSources.length) {
     renderApp();
@@ -353,7 +393,7 @@ app.addEventListener('click', (event) => {
     const connection = state.config.connections.find((item) => item.id === 'primary');
     const form = document.querySelector('[data-form="settings"]');
     const currentToken = form?.elements?.token?.value || connection?.token || '';
-    const headers = { Accept: 'application/json', ...(currentToken ? { Authorization: `Bearer ${currentToken}` } : {}) };
+    const headers = { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken };
     state.tokenGenerating = true;
     const button = actionTarget;
     button.disabled = true;
@@ -394,12 +434,12 @@ app.addEventListener('click', (event) => {
     const form = document.querySelector('[data-form="settings"]');
     const connection = state.config.connections.find((item) => item.id === 'primary');
     const currentToken = form?.elements?.token?.value || connection?.token || '';
-    fetch('/api/auth/revoke', { method: 'POST', headers: { Accept: 'application/json', ...(currentToken ? { Authorization: `Bearer ${currentToken}` } : {}) } }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) { const error = payload.error; throw new Error(error?.message || payload.message || error || `HTTP ${response.status}`); } return payload; }).then(() => { if (connection) connection.token = ''; state.pendingToken = ''; state.tokenNotice = ''; saveState(); const input = document.querySelector('[data-form="settings"] input[name="token"]'); if (input) { input.value = ''; input.type = 'password'; } document.querySelector('.token-reveal')?.remove(); toast('Token interno revogado imediatamente.', 'success'); }).catch((error) => toast(`Revogação falhou: ${error.message}`));
+    fetch('/api/auth/revoke', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) { const error = payload.error; throw new Error(error?.message || payload.message || error || `HTTP ${response.status}`); } return payload; }).then(() => { if (connection) connection.token = ''; state.pendingToken = ''; state.tokenNotice = ''; saveState(); const input = document.querySelector('[data-form="settings"] input[name="token"]'); if (input) { input.value = ''; input.type = 'password'; } document.querySelector('.token-reveal')?.remove(); toast('Token interno revogado imediatamente.', 'success'); }).catch((error) => toast(`Revogação falhou: ${error.message}`));
     return;
   }
   if (action === 'toggle-save') {
     const item = state.launches.find((launch) => launch.id === actionTarget.dataset.id);
-    if (item) { item.saved = !item.saved; item.status = item.saved ? 'interested' : 'new'; saveState(); renderApp(); toast(item.saved ? 'Adicionado à sua lista.' : 'Removido da sua lista.'); }
+    if (item) { const previous = item.saved; item.saved = !item.saved; item.status = item.saved ? 'interested' : 'new'; saveState(); renderApp(); fetch(`/api/catalog/${encodeURIComponent(item.id)}/favorite`, { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível guardar o favorito.'); toast(payload.saved ? 'Adicionado à sua lista.' : 'Removido da sua lista.', 'success'); }).catch((error) => { item.saved = previous; saveState(); renderApp(); toast(`Favorito não guardado: ${error.message}`); }); }
     return;
   }
   if (action === 'clear-filters') { state.query = ''; state.eventName = ''; state.platform = 'Todas'; state.type = 'Todos'; state.period = 'Todos'; state.producer = 'Todos'; state.status = 'Todos'; renderApp(); return; }
@@ -418,6 +458,18 @@ app.addEventListener('change', (event) => {
 });
 
 app.addEventListener('submit', (event) => {
+  if (event.target.matches('[data-form="login"]')) {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível iniciar sessão.'); return payload; }).then(async (payload) => { state.auth = payload.user; state.csrfToken = payload.csrfToken; state.authError = ''; renderApp(); await hydrateCatalog(); toast(`Sessão iniciada para ${payload.user.name}.`, 'success'); }).catch((error) => { state.authError = error.message; renderApp(); });
+    return;
+  }
+  if (event.target.matches('[data-form="provider"]')) {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    fetch('/api/admin/providers', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ name: form.get('name'), url: form.get('url'), type: 'rss', enabled: true }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível adicionar a fonte.'); return payload; }).then(() => { event.target.reset(); toast('Fonte RSS adicionada. Execute uma nova busca para consultar dados reais.', 'success'); }).catch((error) => toast(`Fonte não adicionada: ${error.message}`));
+    return;
+  }
   if (!event.target.matches('[data-form="settings"]')) return;
   event.preventDefault();
   const form = new FormData(event.target);
@@ -442,4 +494,4 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.settingsOpen) { state.settingsOpen = false; renderApp(); }
 });
 
-renderApp();
+fetch('/api/auth/me').then((response) => response.json()).then(async (payload) => { state.auth = payload.authenticated ? payload.user : null; renderApp(); if (state.auth) await hydrateCatalog(); }).catch(() => { state.auth = null; renderApp(); });

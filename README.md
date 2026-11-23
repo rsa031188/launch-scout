@@ -2,20 +2,20 @@
 
 LaunchScout é uma aplicação Node.js unificada: o radar, o endpoint MCP, a geração de tokens e o catálogo persistente vivem no mesmo servidor e no mesmo domínio. O catálogo preserva `source`, `discoveredAt` e `registration` em cada lançamento para manter a proveniência do sinal.
 
-## Executar localmente
+## Executar no ambiente Node.js da Hostinger
 
 ```bash
 npm install
 npm run dev
 ```
 
-`npm run dev` já compila a interface e inicia o servidor unificado. Não use `vite preview` ou um servidor estático isolado para testar a geração de token, porque esses comandos não expõem `/api/auth/generate` nem `/api/mcp`.
+Na Hostinger, instale com `npm ci`, compile com `npm run build` e defina `server.js` como ficheiro de arranque da aplicação Node.js. Alternativamente, use `npm run start:production` se o painel aceitar comandos npm. Não use `vite preview` nem um servidor estático isolado: esses processos não expõem `/api/auth/generate` nem `/api/mcp`.
 
 O build de produção é gerado com `npm run build` em `dist/`.
 
 ## Hospedagem Hostinger
 
-No Hostinger, execute `npm ci && npm run start:production` no ambiente Node. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `data/launchscout.json`, que deve ficar fora do Git e ser incluído no backup do servidor.
+Na Hostinger, execute `npm ci`, `npm run build` e depois `node server.js` através da aplicação Node.js do painel. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `LAUNCHSCOUT_DATA_DIR`, que deve apontar para armazenamento persistente e ser incluído no backup.
 
 Requisito: Node.js 20.19 ou superior.
 
@@ -30,24 +30,24 @@ CORS_ORIGIN=https://seu-dominio.com
 
 Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta Node configurada.
 
-## MCP
+## Autenticação e MCP
 
-Abra **Configurações MCP** para gerar o token diretamente no LaunchScout Core. O token é armazenado no servidor apenas como hash SHA-256 e é exibido uma única vez. O agente primário usa automaticamente o endpoint relativo `/api/mcp`, eliminando conflito de endpoint. Agentes externos adicionais ainda podem ser configurados quando necessário; cada agente possui nome, função, endpoint e token próprios.
+Crie o primeiro administrador através do bootstrap protegido documentado em `docs/SECURITY-AND-HOSTINGER.md` e depois entre na interface. As operações administrativas de token exigem sessão autenticada e CSRF; visitantes não podem gerar, recuperar, consultar ou revogar credenciais. O agente primário usa automaticamente o endpoint relativo `/api/mcp`.
 
 ### Ciclo de vida do token
 
-- **Primeira geração:** quando não existe token, use **Gerar ou renovar token interno**.
-- **Emissão aberta/renovação:** use **Gerar ou renovar token interno**. A operação pode ser executada sem chave administrativa e substitui imediatamente o token anterior; se o token atual estiver disponível, ele é enviado para registrar a rotação autenticada.
-- **Revogação:** use **Revogar token interno**; a operação é aberta nesta instalação privada e chamadas MCP deixam de funcionar na hora.
-- **Recuperação:** se o token foi perdido, gere um novo diretamente. A operação não exige apagar `data/launchscout.json`.
+- **Primeira geração:** depois do login administrativo, use **Gerar token interno**.
+- **Rotação:** use **Gerar novo token e substituir**; o token anterior é invalidado imediatamente.
+- **Revogação:** use **Revogar token interno**; chamadas MCP deixam de funcionar na hora.
+- **Recuperação:** se o token foi perdido, use a recuperação autenticada; não é necessário apagar o armazenamento.
 
-O endpoint de emissão aberta é:
+O endpoint de geração autenticada é:
 
 ```text
 POST /api/auth/generate
 ```
 
-O servidor retorna o token em texto puro somente nessa resposta. O arquivo `data/launchscout.json` armazena apenas o hash SHA-256. Como a emissão e a revogação são abertas, publique a aplicação apenas em HTTPS e mantenha o domínio, proxy ou ambiente de hospedagem restrito à sua operação privada.
+O servidor retorna o token em texto puro somente nessa resposta. O arquivo `data/launchscout.json` não contém o token em texto puro: guarda a cifra AES-256-GCM e o hash SHA-256. Publique a aplicação apenas em HTTPS e mantenha `MCP_MASTER_KEY` fora do repositório.
 
 O LaunchScout chama `initialize` para testar a conexão e `tools/call` com `search_launches` para pesquisar. O endpoint interno compartilha exatamente o mesmo armazenamento usado pelo radar.
 
