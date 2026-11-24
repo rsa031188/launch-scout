@@ -20,6 +20,6 @@ Este projeto não deve ser publicado como site estático nem executado com `vite
 
 Na instalação, execute `npm ci`. Antes do arranque, execute `npm run build`. Configure `PORT` conforme o painel Node.js e mantenha `HOST=0.0.0.0`; o servidor já lê a porta fornecida pela Hostinger. Aponte `LAUNCHSCOUT_DATA_DIR` para armazenamento persistente incluído nos backups. Publique exclusivamente atrás de HTTPS e restrinja `CORS_ORIGIN` à origem exata quando for necessário acesso cross-origin.
 
-O domínio deve apontar para a aplicação Node.js criada no painel. A validação correta é abrir o domínio e confirmar que `GET /api/auth/bootstrap` devolve JSON; se o domínio devolver apenas `index.html` ou um 404 estático em `/api/auth/generate`, a aplicação está configurada como estática ou com o arranque errado.
+O domínio deve apontar para a aplicação Node.js criada no painel. Depois de reiniciar a aplicação, valide primeiro `GET /health`, que deve devolver JSON com `"runtime":"node"`, e depois `GET /api/auth/bootstrap`. Se o domínio devolver apenas `index.html` ou um 404 estático em `/api/health`/`/api/auth/generate`, a aplicação está configurada como estática, o domínio está ligado ao website errado ou o arranque não está a usar `server.js`.
 
 Ainda dependem de configuração externa legítima a pesquisa web/API e os agentes remotos. O sistema não os marca como ativos sem provedor, endpoint e teste.

@@ -30,6 +30,8 @@ CORS_ORIGIN=https://seu-dominio.com
 
 Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta Node configurada.
 
+Para confirmar que o domínio está ligado ao processo Node correto, abra `https://seu-dominio.com/health`. A resposta esperada é JSON contendo `"runtime":"node"`. Se aparecer uma página 404/HTML, o domínio ainda está a apontar para alojamento estático ou para outra aplicação; no painel Node.js, use `server.js` como ficheiro de arranque, reinicie a aplicação e aponte o domínio para essa aplicação.
+
 ## Autenticação e MCP
 
 Crie o primeiro administrador através do bootstrap protegido documentado em `docs/SECURITY-AND-HOSTINGER.md` e depois entre na interface. As operações administrativas de token exigem sessão autenticada e CSRF; visitantes não podem gerar, recuperar, consultar ou revogar credenciais. O agente primário usa automaticamente o endpoint relativo `/api/mcp`.
