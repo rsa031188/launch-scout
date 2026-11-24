@@ -16,7 +16,7 @@ Após login administrativo, `POST /api/auth/generate` cria um único token. A ve
 
 ## Hostinger
 
-Este projeto não deve ser publicado como site estático nem executado com `vite preview`. No painel de aplicações Node.js da Hostinger, selecione Node.js `20.19` ou superior, defina a raiz da aplicação para a pasta que contém `server.js` e configure o ficheiro de arranque como `server.js` — ou o comando equivalente `npm run start:production` quando o painel aceitar scripts npm.
+Este projeto não deve ser publicado como site estático nem executado com `vite preview`. No painel de aplicações Node.js da Hostinger, selecione Node.js `20.19` ou superior, defina a raiz da aplicação para a pasta que contém `server.js` e configure o ficheiro de arranque como `server.js`. O pacote inclui também `app.js`, que importa e inicia o mesmo `server.js` para painéis cujo arranque padrão seja `app.js`. Também pode usar `npm start` ou o comando equivalente `npm run start:production` quando o painel aceitar scripts npm.
 
 Na instalação, execute `npm ci`. Antes do arranque, execute `npm run build`. Configure `PORT` conforme o painel Node.js e mantenha `HOST=0.0.0.0`; o servidor já lê a porta fornecida pela Hostinger. Aponte `LAUNCHSCOUT_DATA_DIR` para armazenamento persistente incluído nos backups. Publique exclusivamente atrás de HTTPS e restrinja `CORS_ORIGIN` à origem exata quando for necessário acesso cross-origin.
 

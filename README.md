@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Na Hostinger, instale com `npm ci`, compile com `npm run build` e defina `server.js` como ficheiro de arranque da aplicação Node.js. Alternativamente, use `npm run start:production` se o painel aceitar comandos npm. Não use `vite preview` nem um servidor estático isolado: esses processos não expõem `/api/auth/generate` nem `/api/mcp`.
+Na Hostinger, instale com `npm ci`, compile com `npm run build` e defina `server.js` como ficheiro de arranque da aplicação Node.js. O pacote também inclui `app.js` como ponto de entrada compatível com painéis que usam esse nome por padrão; `app.js` inicia o mesmo servidor. Alternativamente, use `npm start` ou `npm run start:production` se o painel aceitar comandos npm. Não use `vite preview` nem um servidor estático isolado: esses processos não expõem `/api/auth/generate` nem `/api/mcp`.
 
 O build de produção é gerado com `npm run build` em `dist/`.
 
