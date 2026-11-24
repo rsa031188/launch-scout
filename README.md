@@ -34,6 +34,8 @@ Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta
 
 Crie o primeiro administrador através do bootstrap protegido documentado em `docs/SECURITY-AND-HOSTINGER.md` e depois entre na interface. As operações administrativas de token exigem sessão autenticada e CSRF; visitantes não podem gerar, recuperar, consultar ou revogar credenciais. O agente primário usa automaticamente o endpoint relativo `/api/mcp`.
 
+Por conveniência no primeiro arranque, uma instalação vazia cria `admin` / `admin` por padrão. Altere esta password imediatamente e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` na Hostinger; não mantenha esta credencial numa aplicação pública.
+
 ### Ciclo de vida do token
 
 - **Primeira geração:** depois do login administrativo, use **Gerar token interno**.
