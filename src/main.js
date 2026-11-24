@@ -24,6 +24,7 @@ const state = {
   auth: null,
   csrfToken: '',
   authError: '',
+  authMode: 'login',
   launches: JSON.parse(localStorage.getItem('launchscout-launches') || 'null') || [],
   query: '',
   eventName: '',
@@ -40,6 +41,8 @@ const state = {
   pendingToken: '',
   tokenGenerating: false,
   tokenNotice: '',
+  syncStatus: 'idle',
+  syncError: '',
   lastSync: localStorage.getItem('launchscout-last-sync') || 'agora mesmo',
   config: JSON.parse(localStorage.getItem('launchscout-config') || 'null') || {
     agentName: 'LaunchScout Scout',
@@ -69,10 +72,11 @@ const saveState = () => {
   localStorage.setItem('launchscout-config', JSON.stringify({ ...state.config, connections: state.config.connections.map((connection) => ({ ...connection, token: '' })) }));
 };
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
-const formatDate = (value, compact = false) => new Intl.DateTimeFormat('pt-BR', compact ? { day: '2-digit', month: 'short' } : { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)).replace('.', '');
-const daysUntil = (value) => Math.ceil((new Date(value).getTime() - Date.now()) / 86400000);
+const formatDate = (value, compact = false) => { if (!value || Number.isNaN(new Date(value).getTime())) return 'Data desconhecida'; return new Intl.DateTimeFormat('pt-PT', compact ? { day: '2-digit', month: 'short' } : { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)).replace('.', ''); };
+const daysUntil = (value) => { if (!value || Number.isNaN(new Date(value).getTime())) return null; return Math.ceil((new Date(value).getTime() - Date.now()) / 86400000); };
 const relativeDate = (value) => {
   const days = daysUntil(value);
+  if (days === null) return 'Data desconhecida';
   if (days <= 0) return 'Hoje';
   if (days === 1) return 'Amanhã';
   if (days < 7) return `Em ${days} dias`;
@@ -129,18 +133,18 @@ function renderSidebar() {
     </nav>
     <div class="sidebar-bottom">
       <div class="sync-card">
-        <div class="sync-card-top"><span class="signal-bars"><i></i><i></i><i></i></span><span>Scout online</span></div>
+        <div class="sync-card-top"><span class="signal-bars"><i></i><i></i><i></i></span><span>${state.syncStatus === 'loading' ? 'A sincronizar' : state.syncStatus === 'error' ? 'Atenção necessária' : state.syncStatus === 'synced' ? 'Scout sincronizado' : 'Scout pronto'}</span></div>
         <p>Última varredura<br><strong>${esc(state.lastSync)}</strong></p>
         <button class="text-button" data-action="discover">${icon('spark', 14)} Buscar novidades</button>
       </div>
       <button class="nav-item settings-link" data-action="settings">${icon('settings')}<span>Configurações MCP</span></button>
-      <div class="profile-chip"><div class="avatar">RA</div><div><strong>Ronaldo Alves</strong><small>Curador pessoal</small></div><span class="profile-more">•••</span></div>
+      <div class="profile-chip"><div class="avatar">${esc((state.auth?.name || state.auth?.email || 'U').split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase())}</div><div><strong>${esc(state.auth?.name || state.auth?.email || 'Utilizador')}</strong><small>${esc(state.auth?.role || 'Conta')}</small></div><button class="profile-more profile-action" data-action="logout" aria-label="Terminar sessão">Sair</button></div>
     </div>
   </aside>`;
 }
 
 function renderTopbar(title, eyebrow = 'RADAR PESSOAL') {
-  return `<header class="topbar"><div class="topbar-heading"><div class="eyebrow">${eyebrow}</div><h1>${title}</h1></div><div class="topbar-actions"><div class="quick-search">${icon('search', 17)}<input data-field="query" value="${esc(state.query)}" placeholder="Buscar lançamentos..." aria-label="Buscar lançamentos"/><kbd>/</kbd></div><button class="icon-button notification-button" aria-label="Notificações">${icon('bell')}<span class="notification-dot"></span></button><button class="avatar small">RA</button></div></header>`;
+  return `<header class="topbar"><div class="topbar-heading"><div class="eyebrow">${eyebrow}</div><h1>${title}</h1></div><div class="topbar-actions"><div class="quick-search">${icon('search', 17)}<input data-field="query" value="${esc(state.query)}" placeholder="Buscar lançamentos..." aria-label="Buscar lançamentos"/><kbd>/</kbd></div><button class="icon-button notification-button" aria-label="Notificações">${icon('bell')}<span class="notification-dot"></span></button><button class="avatar small" data-action="settings" aria-label="Abrir configurações da conta">${esc((state.auth?.name || state.auth?.email || 'U').split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase())}</button></div></header>`;
 }
 
 function renderStats() {
@@ -176,8 +180,12 @@ function renderSavedView() {
 
 function renderDashboard() {
   state.status = 'Todos';
-  const featured = [...state.launches].sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 3);
-  return `${renderTopbar('Visão geral', 'SISTEMA DE DESCOBERTA')}${renderStats()}${renderHero()}<section class="dashboard-lower"><div class="mini-list"><div class="section-heading compact"><div><div class="eyebrow">PRÓXIMOS SINAIS</div><h2>Na sua linha de visão</h2></div><button class="text-button" data-view="catalog">Ver todos ${icon('arrow', 14)}</button></div>${featured.map((item) => `<button class="mini-launch" data-id="${esc(item.id)}" data-action="focus-card"><span class="mini-cover" style="background-image:url('${item.image}')"></span><span class="mini-info"><strong>${esc(item.title)}</strong><small>${esc(item.producer)} · ${relativeDate(item.date)}</small></span><span class="mini-type">${esc(item.type)}</span>${icon('arrow', 15)}</button>`).join('')}</div><div class="insight-card"><div class="eyebrow lime">LEITURA DO RADAR</div><h3>Há mais sinais em <em>ofertas e audiência</em> nesta semana.</h3><p>O padrão mais recorrente entre suas fontes é o de workshops enxutos com inscrição antecipada.</p><div class="insight-bars"><span style="height:72%"><i>OFERTA</i></span><span style="height:52%"><i>AUDIÊNCIA</i></span><span style="height:38%"><i>PRODUTO</i></span><span style="height:24%"><i>LIVE</i></span></div></div></section>`;
+  const featured = [...state.launches].filter((item) => daysUntil(item.date) === null || daysUntil(item.date) >= 0).sort((a, b) => (daysUntil(a.date) ?? 99999) - (daysUntil(b.date) ?? 99999)).slice(0, 3);
+  const categories = state.launches.reduce((acc, item) => { const key = item.type || 'Outros'; acc[key] = (acc[key] || 0) + 1; return acc; }, {});
+  const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
+  const categoryShare = topCategory ? Math.round((topCategory[1] / Math.max(1, state.launches.length)) * 100) : 0;
+  const insight = topCategory ? `A categoria mais frequente é ${topCategory[0]}, com ${topCategory[1]} de ${state.launches.length} sinais (${categoryShare}%).` : 'Ainda não existem dados suficientes para gerar uma leitura do radar.';
+  return `${renderTopbar('Visão geral', 'SISTEMA DE DESCOBERTA')}${renderStats()}${renderHero()}<section class="dashboard-lower"><div class="mini-list"><div class="section-heading compact"><div><div class="eyebrow">PRÓXIMOS SINAIS</div><h2>Na sua linha de visão</h2></div><button class="text-button" data-view="catalog">Ver todos ${icon('arrow', 14)}</button></div>${featured.map((item) => `<button class="mini-launch" data-id="${esc(item.id)}" data-action="focus-card"><span class="mini-cover" style="background-image:url('${item.image || ''}')"></span><span class="mini-info"><strong>${esc(item.title)}</strong><small>${esc(item.producer)} · ${relativeDate(item.date)}</small></span><span class="mini-type">${esc(item.type)}</span>${icon('arrow', 15)}</button>`).join('')}</div><div class="insight-card"><div class="eyebrow lime">LEITURA DO RADAR · ${state.launches.length} SINAIS</div><h3>${esc(insight)}</h3><p>Leitura calculada a partir do catálogo sincronizado. Não é uma previsão; representa apenas a distribuição atual dos dados recebidos.</p><div class="insight-bars"><span style="height:${Math.max(8, categoryShare)}%"><i>${esc(topCategory?.[0] || 'SEM DADOS')}</i></span><span style="height:${Math.max(8, Math.round(state.launches.filter((item) => item.saved).length / Math.max(1, state.launches.length) * 100))}%"><i>SALVOS</i></span></div></div></section>`;
 }
 
 function renderSettingsModal() {
@@ -197,7 +205,8 @@ function renderSettingsModal() {
 }
 
 function renderAuth() {
-  return `<main class="auth-screen"><section class="auth-panel"><div class="brand-lockup"><div class="brand-mark">${icon('radar', 24)}</div><div><div class="brand-name">LaunchScout</div><div class="brand-kicker">personal launch radar</div></div></div><div class="eyebrow lime">ACESSO PROTEGIDO</div><h1>Entre no seu radar.</h1><p>A área de administração e as credenciais MCP ficam disponíveis apenas após autenticação.</p><form class="auth-form" data-form="login"><label>E-mail<input name="email" type="text" autocomplete="username" required placeholder="admin" /></label><label>Password<input name="password" type="password" autocomplete="current-password" required placeholder="A sua password" /></label>${state.authError ? `<div class="auth-error">${esc(state.authError)}</div>` : ''}<button class="primary-button" type="submit">${icon('arrow', 15)} Iniciar sessão</button></form><small class="auth-footnote">O primeiro administrador deve ser criado através do procedimento de bootstrap configurado no servidor.</small></section></main>`;
+  const registering = state.authMode === 'register';
+  return `<main class="auth-screen"><section class="auth-panel"><div class="brand-lockup"><div class="brand-mark">${icon('radar', 24)}</div><div><div class="brand-name">LaunchScout</div><div class="brand-kicker">personal launch radar</div></div></div><div class="eyebrow lime">${registering ? 'NOVA CONTA' : 'ACESSO PROTEGIDO'}</div><h1>${registering ? 'Crie o seu radar.' : 'Entre no seu radar.'}</h1><p>${registering ? 'Crie a sua conta para começar a guardar sinais e configurar as suas fontes.' : 'A área de administração e as credenciais MCP ficam disponíveis apenas após autenticação.'}</p><div class="auth-tabs" role="tablist"><button type="button" class="auth-tab ${!registering ? 'active' : ''}" data-action="auth-login">Iniciar sessão</button><button type="button" class="auth-tab ${registering ? 'active' : ''}" data-action="auth-register">Criar conta</button></div><form class="auth-form" data-form="${registering ? 'register' : 'login'}">${registering ? '<label>Nome<input name="name" type="text" autocomplete="name" required placeholder="O seu nome" /></label>' : ''}<label>${registering ? 'E-mail' : 'E-mail ou utilizador'}<input name="email" type="text" autocomplete="username" required placeholder="${registering ? 'nome@exemplo.com' : 'admin'}" /></label><label>Password<input name="password" type="password" autocomplete="${registering ? 'new-password' : 'current-password'}" minlength="${registering ? '12' : '1'}" required placeholder="A sua password" /></label>${registering ? '<label>Confirmar password<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="12" required placeholder="Repita a password" /></label>' : ''}${state.authError ? `<div class="auth-error">${esc(state.authError)}</div>` : ''}<button class="primary-button" type="submit">${icon('arrow', 15)} ${registering ? 'Criar conta e entrar' : 'Iniciar sessão'}</button></form><small class="auth-footnote">${registering ? 'A password deve ter pelo menos 12 caracteres.' : 'Pode criar uma nova conta no separador acima. A conta admin inicial é temporária e deve alterar a password.'}</small></section></main>`;
 }
 
 function renderApp() {
@@ -231,14 +240,16 @@ async function parseJsonResponse(response) {
 
 async function hydrateCatalog() {
   if (!state.auth) return;
+  state.syncStatus = 'loading'; state.syncError = ''; renderApp();
   try {
     const response = await fetch('/api/catalog?limit=100');
     const payload = await parseJsonResponse(response);
     if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível carregar o catálogo.');
-    state.launches = (payload.items || []).map((item, index) => normalizeMcpItem(item, index, { endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean).map((item, index) => ({ ...item, saved: Boolean(payload.items[index]?.saved), status: payload.items[index]?.verification === 'confirmed' ? 'confirmed' : item.status }));
+    state.launches = (payload.items || []).map((raw, index) => { const item = normalizeMcpItem(raw, index, { endpoint: INTERNAL_MCP_ENDPOINT }); return item ? { ...item, saved: Boolean(raw.saved), status: raw.verification === 'confirmed' ? 'confirmed' : item.status } : null; }).filter(Boolean);
+    state.syncStatus = 'synced'; state.lastSync = 'agora mesmo';
     saveState();
     renderApp();
-  } catch (error) { toast(`Catálogo não sincronizado: ${error.message}`); }
+  } catch (error) { state.syncStatus = 'error'; state.syncError = error.message; renderApp(); toast(`Catálogo não sincronizado: ${error.message}`); }
 }
 
 async function callMcp(connection, method, params = {}) {
@@ -364,6 +375,9 @@ app.addEventListener('click', (event) => {
     renderApp();
     return;
   }
+  if (action === 'auth-login') { state.authMode = 'login'; state.authError = ''; renderApp(); return; }
+  if (action === 'auth-register') { state.authMode = 'register'; state.authError = ''; renderApp(); return; }
+  if (action === 'logout') { fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).finally(() => { state.auth = null; state.csrfToken = ''; state.settingsOpen = false; renderApp(); }); return; }
   if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; renderApp(); return; }
   if (action === 'close-settings') { state.settingsOpen = false; renderApp(); return; }
   if (action === 'new-connection') { state.editingConnectionId = 'new'; renderApp(); return; }
@@ -458,10 +472,20 @@ app.addEventListener('change', (event) => {
 });
 
 app.addEventListener('submit', (event) => {
-  if (event.target.matches('[data-form="login"]')) {
+  if (event.target.matches('[data-form="login"]') || event.target.matches('[data-form="register"]')) {
     event.preventDefault();
     const form = new FormData(event.target);
-    fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível iniciar sessão.'); return payload; }).then(async (payload) => { state.auth = payload.user; state.csrfToken = payload.csrfToken; state.authError = ''; renderApp(); await hydrateCatalog(); toast(`Sessão iniciada para ${payload.user.name}.`, 'success'); }).catch((error) => { state.authError = error.message; renderApp(); });
+    const registering = event.target.matches('[data-form="register"]');
+    const endpoint = registering ? '/api/auth/register' : '/api/auth/login';
+    const body = registering ? { name: form.get('name'), email: form.get('email'), password: form.get('password'), passwordConfirmation: form.get('passwordConfirmation') } : { email: form.get('email'), password: form.get('password') };
+    const submit = event.target.querySelector('button[type="submit"]'); if (submit) { submit.disabled = true; submit.textContent = registering ? 'A criar conta…' : 'A iniciar sessão…'; }
+    fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || (registering ? 'Não foi possível criar a conta.' : 'Não foi possível iniciar sessão.')); return payload; }).then(async (payload) => {
+      if (registering) {
+        const loginResponse = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ email: body.email, password: body.password }) });
+        const loginPayload = await parseJsonResponse(loginResponse); if (!loginResponse.ok) throw new Error(loginPayload.error?.message || 'Conta criada, mas não foi possível iniciar a sessão automaticamente.'); payload = loginPayload;
+      }
+      state.auth = payload.user; state.csrfToken = payload.csrfToken; state.authError = ''; state.authMode = 'login'; renderApp(); await hydrateCatalog(); toast(registering ? 'Conta criada e sessão iniciada.' : `Sessão iniciada para ${payload.user.name}.`, 'success');
+    }).catch((error) => { state.authError = error.message; renderApp(); });
     return;
   }
   if (event.target.matches('[data-form="password"]')) {

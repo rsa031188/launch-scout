@@ -178,3 +178,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: clamp(27px, 3vw, 39px); letter-spac
 @media (max-width: 860px) {
   .settings-modal { max-height: calc(100vh - 28px); overflow-y: auto; }
 }
+
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); }
+.auth-tab { border: 0; border-radius: 5px; padding: 9px; color: var(--muted); background: transparent; font-size: 11px; }
+.auth-tab.active { color: #10170e; background: var(--lime); font-weight: 600; }
+.auth-tab:hover:not(.active) { color: var(--text); background: rgba(255,255,255,.05); }

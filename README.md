@@ -36,6 +36,8 @@ Para confirmar que o domínio está ligado ao processo Node correto, abra `https
 
 Crie o primeiro administrador através do bootstrap protegido documentado em `docs/SECURITY-AND-HOSTINGER.md` e depois entre na interface. As operações administrativas de token exigem sessão autenticada e CSRF; visitantes não podem gerar, recuperar, consultar ou revogar credenciais. O agente primário usa automaticamente o endpoint relativo `/api/mcp`.
 
+O ecrã de acesso inclui o separador **Criar conta**. O utilizador pode definir nome, e-mail e password com confirmação; depois do registo válido, a sessão é iniciada automaticamente. Contas novas recebem o papel `user`; o papel `admin` continua reservado ao bootstrap/gestão administrativa.
+
 Por conveniência no primeiro arranque, uma instalação vazia cria `admin` / `admin` por padrão. Altere esta password imediatamente e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` na Hostinger; não mantenha esta credencial numa aplicação pública.
 
 ### Ciclo de vida do token
