@@ -38,7 +38,7 @@ Crie o primeiro administrador através do bootstrap protegido documentado em `do
 
 O ecrã de acesso inclui o separador **Criar conta**. O utilizador pode definir nome, e-mail e password com confirmação; depois do registo válido, a sessão é iniciada automaticamente. Contas novas recebem o papel `user`; o papel `admin` continua reservado ao bootstrap/gestão administrativa.
 
-Por conveniência no primeiro arranque, uma instalação vazia cria `admin` / `admin` por padrão. Altere esta password imediatamente e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` na Hostinger; não mantenha esta credencial numa aplicação pública.
+Por conveniência no primeiro arranque, uma instalação vazia cria `LaunchScout` / `Launch_admin` por padrão. Altere esta password imediatamente e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` na Hostinger; não mantenha esta credencial numa aplicação pública.
 
 ### Ciclo de vida do token
 

@@ -16,14 +16,14 @@ try {
   await waitForServer();
   const health = await request('/health');
   assert.equal(health.body.runtime, 'node');
-  const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin', password: 'admin' }) });
+  const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'LaunchScout', password: 'Launch_admin' }) });
   assert.equal(login.response.status, 200);
   assert.ok(login.body.csrfToken);
   const account = await request('/api/account');
-  assert.equal(account.body.account.email, 'admin');
+  assert.equal(account.body.account.email, 'LaunchScout');
   const updated = await request('/api/account', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken }, body: JSON.stringify({ name: 'Administrador LaunchScout' }) });
   assert.equal(updated.response.status, 200);
-  const password = await request('/api/auth/password', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken }, body: JSON.stringify({ currentPassword: 'admin', newPassword: 'Admin-password-2026!', confirmPassword: 'Admin-password-2026!' }) });
+  const password = await request('/api/auth/password', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken }, body: JSON.stringify({ currentPassword: 'Launch_admin', newPassword: 'Admin-password-2026!', confirmPassword: 'Admin-password-2026!' }) });
   assert.equal(password.response.status, 200);
   const registered = await request('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Utilizador Teste', email: `teste-${Date.now()}@example.org`, password: 'User-password-2026!', passwordConfirmation: 'User-password-2026!' }) });
   assert.equal(registered.response.status, 201);

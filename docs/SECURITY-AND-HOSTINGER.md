@@ -4,7 +4,7 @@ A versão atual usa um servidor HTTP unificado, armazenamento persistente config
 
 ## Primeiro arranque
 
-Por conveniência de instalação, quando o armazenamento está vazio e `LAUNCHSCOUT_DEFAULT_ADMIN` não é `false`, o servidor cria a conta inicial `admin` com password `admin`. Esta credencial é deliberadamente temporária e insegura: altere-a imediatamente após entrar e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` antes de deixar o domínio acessível publicamente. Para ambientes novos sem credencial padrão, defina a variável como `false` e use o bootstrap protegido abaixo.
+Por conveniência de instalação, quando o armazenamento está vazio e `LAUNCHSCOUT_DEFAULT_ADMIN` não é `false`, o servidor cria a conta inicial `LaunchScout` com password `Launch_admin`. Esta credencial é deliberadamente temporária e insegura: altere-a imediatamente após entrar e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` antes de deixar o domínio acessível publicamente. Para ambientes novos sem credencial padrão, defina a variável como `false` e use o bootstrap protegido abaixo.
 
 Defina `LAUNCHSCOUT_BOOTSTRAP_SECRET` e `MCP_MASTER_KEY` no ambiente privado da Hostinger. `MCP_MASTER_KEY` deve ter exatamente 32 bytes em base64 ou 64 caracteres hexadecimais. Inicie a aplicação e execute uma única vez `POST /api/auth/bootstrap`, enviando o segredo no header `X-Bootstrap-Secret` e um JSON com `name`, `email` e `password` de pelo menos 12 caracteres. Depois disso o bootstrap fica bloqueado permanentemente enquanto existir um utilizador.
 
