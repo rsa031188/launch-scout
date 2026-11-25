@@ -50,6 +50,20 @@ const state = {
   }
 };
 
+const MCP_SESSION_TOKENS_KEY = 'launchscout-mcp-session-tokens';
+const readSessionTokens = () => {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(MCP_SESSION_TOKENS_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch { return {}; }
+};
+const writeSessionTokens = (connections) => {
+  try {
+    const tokens = Object.fromEntries(connections.filter((connection) => connection.id && connection.token).map((connection) => [connection.id, connection.token]));
+    sessionStorage.setItem(MCP_SESSION_TOKENS_KEY, JSON.stringify(tokens));
+  } catch {}
+};
+
 if (!Array.isArray(state.config.connections)) {
   state.config.connections = [{
     id: 'primary',
@@ -61,7 +75,8 @@ if (!Array.isArray(state.config.connections)) {
   }];
 }
 state.config.connections = state.config.connections.map((connection) => (connection.endpoint?.includes('mcp.launchscout.local') || connection.endpoint?.includes('sculpted-orange-giraffe-25.hostingersite.com')) ? { ...connection, endpoint: INTERNAL_MCP_ENDPOINT, token: '', name: connection.id === 'primary' ? 'LaunchScout Core' : connection.name } : connection);
-state.config.connections = state.config.connections.map((connection) => ({ ...connection, token: '' }));
+const sessionTokens = readSessionTokens();
+state.config.connections = state.config.connections.map((connection) => ({ ...connection, token: sessionTokens[connection.id] || '' }));
 const activeConnections = () => state.config.connections.filter((connection) => connection.connected && connection.endpoint);
 const activeConnection = () => activeConnections()[0] || state.config.connections[0];
 state.launches = state.launches.filter((item) => !String(item.registration || '').includes('example.com') && item.source !== 'demo.launchscout');
@@ -70,6 +85,7 @@ const app = document.querySelector('#app');
 const saveState = () => {
   localStorage.setItem('launchscout-launches', JSON.stringify(state.launches));
   localStorage.setItem('launchscout-config', JSON.stringify({ ...state.config, connections: state.config.connections.map((connection) => ({ ...connection, token: '' })) }));
+  writeSessionTokens(state.config.connections);
 };
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
 const formatDate = (value, compact = false) => { if (!value || Number.isNaN(new Date(value).getTime())) return 'Data desconhecida'; return new Intl.DateTimeFormat('pt-PT', compact ? { day: '2-digit', month: 'short' } : { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)).replace('.', ''); };
