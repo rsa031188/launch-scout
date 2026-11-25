@@ -12,7 +12,9 @@ Faça login através de `POST /api/auth/login`. O servidor devolve um `csrfToken
 
 ## Token MCP
 
-Após login administrativo, `POST /api/auth/generate` cria um único token. A versão anterior é invalidada imediatamente. O servidor guarda o hash SHA-256 para comparação e a cópia cifrada com AES-256-GCM; o texto puro só aparece na resposta de geração/recuperação. `POST /api/auth/revoke` invalida o token ativo. O endpoint MCP é `/api/mcp` e exige `Authorization: Bearer <token>`.
+Por padrão, após login administrativo, `POST /api/auth/generate` cria um único token. A versão anterior é invalidada imediatamente. O servidor guarda o hash SHA-256 para comparação e a cópia cifrada com AES-256-GCM; o texto puro só aparece na resposta de geração/recuperação. `POST /api/auth/revoke` invalida o token ativo. O endpoint MCP é `/api/mcp` e exige `Authorization: Bearer <token>`.
+
+Para usar um token fixo, defina `MCP_FIXED_TOKEN` no ambiente da aplicação com pelo menos 32 caracteres. Nesse modo, o token configurado é sempre aceite, os endpoints de geração/recuperação devolvem o mesmo token ao administrador autenticado e a revogação/rotação pela interface fica bloqueada. Para alterar o token, substitua `MCP_FIXED_TOKEN` e reinicie o servidor. Nunca coloque esse valor no GitHub, no código-fonte ou em mensagens públicas.
 
 ## Hostinger
 

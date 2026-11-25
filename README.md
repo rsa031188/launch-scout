@@ -55,6 +55,8 @@ POST /api/auth/generate
 
 O servidor retorna o token em texto puro somente nessa resposta. O arquivo `data/launchscout.json` não contém o token em texto puro: guarda a cifra AES-256-GCM e o hash SHA-256. Publique a aplicação apenas em HTTPS e mantenha `MCP_MASTER_KEY` fora do repositório.
 
+Se precisar de uma credencial estável definida pelo ambiente, configure `MCP_FIXED_TOKEN` com pelo menos 32 caracteres. Nesse modo, o mesmo token é aceite após reinícios e a rotação/revogação pela interface fica bloqueada; para o trocar, altere a variável e reinicie o servidor. Mantenha `MCP_FIXED_TOKEN` fora do repositório.
+
 O LaunchScout chama `initialize` para testar a conexão e `tools/call` com `search_launches` para pesquisar. O endpoint interno compartilha exatamente o mesmo armazenamento usado pelo radar.
 
 ## Pesquisa abrangente
