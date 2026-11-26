@@ -1,11 +1,17 @@
+import { createMcpInitializeParams } from './mcp-client.js';
+
 export async function collectAgentSearchResults(connections, callMcp, argumentsForSearch, normalizeItem) {
-  const responses = await Promise.allSettled(connections.map(async (connection) => ({
-    connection,
-    result: await callMcp(connection, 'tools/call', {
-      name: 'search_launches',
-      arguments: argumentsForSearch
-    })
-  })));
+  const responses = await Promise.allSettled(connections.map(async (connection) => {
+    const initialized = await callMcp(connection, 'initialize', createMcpInitializeParams());
+    if (!initialized?.serverInfo || !initialized.protocolVersion) throw new Error('mcp_initialize_invalid');
+    return {
+      connection,
+      result: await callMcp(connection, 'tools/call', {
+        name: 'search_launches',
+        arguments: argumentsForSearch
+      })
+    };
+  }));
   const items = [];
   let failedCount = 0;
   let successfulCount = 0;

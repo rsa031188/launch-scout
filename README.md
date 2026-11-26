@@ -7,7 +7,7 @@ LaunchScout é um radar pessoal para descobrir, organizar e acompanhar lançamen
 - Dashboard e catálogo com pesquisa, filtros, ordenação e lista de favoritos.
 - O radar pode carregar e exibir até 300 resultados simultaneamente.
 - Contas com registo e login; a conta administrativa controla configurações e provedores.
-- Pesquisa de feeds RSS públicos, com resultados e histórico guardados no servidor.
+- Pesquisa de feeds RSS/Atom públicos, com resultados e histórico guardados no servidor.
 - Cadastro individual de feeds RSS ou importação em lote a partir de um arquivo JSON.
 - Cards com descrições limitadas a 200 caracteres e imagens de pré-visualização das páginas dos eventos quando disponíveis.
 - Modo IA para pesquisa contextual com Exa AI ou uma API de chat compatível com OpenAI.
@@ -142,7 +142,7 @@ Quando um lançamento não inclui imagem própria, o navegador pede ao servidor 
 
 ## MCP, conexões e automações
 
-O endpoint MCP é `https://seu-dominio/api/mcp`. As requisições MCP usam `Authorization: Bearer <token>` e JSON-RPC 2.0. A interface permite gerar, copiar, recuperar, rotacionar ou revogar o token interno após login administrativo, além de configurar conexões com agentes MCP externos.
+O endpoint MCP é `https://seu-dominio/api/mcp`. As requisições MCP usam `Authorization: Bearer <token>` e JSON-RPC 2.0. A interface negocia MCP `2025-03-26`, envia `notifications/initialized`, mantém a versão/sessão negociadas e aceita respostas JSON ou SSE; também mantém compatibilidade com servidores `2024-11-05`. A interface permite gerar, copiar, recuperar, rotacionar ou revogar o token interno após login administrativo, além de configurar conexões com agentes MCP externos.
 
 Para cadastrar um cliente MCP, use o endpoint acima e o token interno copiado na interface. O servidor oferece `initialize`, `ping`, `tools/list` e `tools/call`. As ferramentas disponíveis são:
 

@@ -1,5 +1,6 @@
 import './styles.css';
 import { collectAgentSearchResults } from './mcp-agents.js';
+import { createMcpClient } from './mcp-client.js';
 import { safeWebUrl, summaryPreview } from './launch-utils.js';
 
 const icon = (name, size = 18) => {
@@ -23,6 +24,7 @@ const icon = (name, size = 18) => {
 
 const INTERNAL_MCP_ENDPOINT = `${window.location.origin}/api/mcp`;
 const MAX_SEARCH_RESULTS = 300;
+const mcpClient = createMcpClient();
 const state = {
   auth: null,
   csrfToken: '',
@@ -403,29 +405,12 @@ async function hydrateCatalog() {
 }
 
 async function callMcp(connection, method, params = {}) {
-  if (!connection?.endpoint) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-  try {
-    const response = await fetch(connection.endpoint, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(connection.token ? { Authorization: `Bearer ${connection.token}` } : {}) },
-      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`MCP HTTP ${response.status}`);
-    const payload = await parseJsonResponse(response);
-    if (payload.error) throw new Error(payload.error.message || 'MCP JSON-RPC error');
-    return payload.result || null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return mcpClient.call(connection, method, params);
 }
 
 async function testConnection(connection) {
-  const result = await callMcp(connection, 'initialize', {});
-  if (!result?.serverInfo) throw new Error('O endpoint não respondeu ao handshake MCP.');
+  mcpClient.reset(connection);
+  const result = await callMcp(connection, 'initialize');
   return result.serverInfo;
 }
 
@@ -457,6 +442,7 @@ async function runDiscovery() {
   toast('Escaneando fontes conectadas…');
   let localItems = [];
   let localSourceCount = 0;
+  let localFailureCount = 0;
   let localError = '';
   if (state.auth) {
     try {
@@ -465,6 +451,7 @@ async function runDiscovery() {
       if (!localResponse.ok) throw new Error(localPayload.error?.message || `HTTP ${localResponse.status}`);
       localItems = (localPayload.items || []).map((item, index) => normalizeMcpItem(item, index, { id: 'local-rss', endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean);
       localSourceCount = (localPayload.sources || []).length;
+      localFailureCount = (localPayload.failures || []).length;
     } catch (error) {
       localError = error.message;
     }
@@ -472,11 +459,21 @@ async function runDiscovery() {
   const connectedSources = activeConnections();
   if (!connectedSources.length && !localItems.length && !localSourceCount) {
     renderApp();
-    toast(localError ? `Pesquisa local falhou: ${localError}. Configure e ative pelo menos um agente MCP.` : 'Configure e ative pelo menos um agente MCP antes de pesquisar.');
+    const failure = localError ? `Pesquisa local falhou: ${localError}.` : localFailureCount ? `${localFailureCount} fonte(s) RSS falharam.` : '';
+    toast(failure || 'Configure uma fonte RSS ou ative pelo menos um agente MCP antes de pesquisar.');
     return;
   }
   try {
-    const argumentsForSearch = { query: state.query || undefined, event_name: state.eventName || undefined, product_type: state.type !== 'Todos' ? state.type : undefined, producer_name: state.producer !== 'Todos' ? state.producer : undefined, source: state.platform !== 'Todas' ? state.platform : undefined, date_window_days: state.period === 'Próximos 7 dias' ? 7 : state.period === 'Este mês' ? 31 : 90, limit: state.searchLimit, sort_by: state.sort === 'date' ? 'date' : 'score' };
+    const today = new Date();
+    const dateOnly = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const dateFrom = state.period === 'Próximos 7 dias' ? dateOnly(today)
+      : state.period === 'Este mês' ? dateOnly(new Date(today.getFullYear(), today.getMonth(), 1))
+        : state.period === 'Depois' ? dateOnly(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 8))
+          : undefined;
+    const dateTo = state.period === 'Próximos 7 dias' ? dateOnly(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7))
+      : state.period === 'Este mês' ? dateOnly(new Date(today.getFullYear(), today.getMonth() + 1, 0))
+        : undefined;
+    const argumentsForSearch = { query: state.query || undefined, event_name: state.eventName || undefined, product_type: state.type !== 'Todos' ? state.type : undefined, producer_name: state.producer !== 'Todos' ? state.producer : undefined, source: state.platform !== 'Todas' ? state.platform : undefined, date_from: dateFrom, date_to: dateTo, limit: state.searchLimit, sort_by: state.sort === 'date' ? 'date' : 'score' };
     const agentSearch = await collectAgentSearchResults(connectedSources, callMcp, argumentsForSearch, normalizeMcpItem);
     const uniqueItems = [...new Map([...localItems, ...agentSearch.items].map((item) => [`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`, item])).values()].slice(0, MAX_SEARCH_RESULTS);
     if (uniqueItems.length) {
@@ -488,12 +485,13 @@ async function runDiscovery() {
       renderApp();
       const agentSummary = connectedSources.length ? `${agentSearch.successfulCount}/${connectedSources.length} agentes` : 'nenhum agente MCP';
       const localSummary = localSourceCount ? `, ${localSourceCount} fonte(s) RSS` : '';
-      toast(`${uniqueItems.length} sinais recebidos de ${agentSummary}${localSummary}.`, 'success');
+      const localFailureSummary = localFailureCount ? `, ${localFailureCount} falha(s) RSS` : '';
+      toast(`${uniqueItems.length} sinais recebidos de ${agentSummary}${localSummary}${localFailureSummary}.`, 'success');
     } else {
       state.lastSync = 'agora mesmo';
       localStorage.setItem('launchscout-last-sync', state.lastSync);
       renderApp();
-      toast(agentSearch.failedCount ? `Nenhum agente respondeu. Falhas: ${agentSearch.failedCount}. Verifique endpoint, token e CORS.${localError ? ` Pesquisa local: ${localError}.` : ''}` : localError ? `Pesquisa local falhou: ${localError}. MCP respondeu, mas não encontrou lançamentos.` : connectedSources.length ? 'MCP respondeu, mas não encontrou lançamentos para esta busca.' : 'Nenhum resultado verificável encontrado nas fontes RSS configuradas.');
+      toast(agentSearch.failedCount ? `Nenhum agente respondeu. Falhas: ${agentSearch.failedCount}. Verifique endpoint, token e CORS.${localError ? ` Pesquisa local: ${localError}.` : ''}${localFailureCount ? ` Falhas RSS: ${localFailureCount}.` : ''}` : localError ? `Pesquisa local falhou: ${localError}. MCP respondeu, mas não encontrou lançamentos.` : connectedSources.length ? `MCP respondeu, mas não encontrou lançamentos para esta busca.${localFailureCount ? ` Falhas RSS: ${localFailureCount}.` : ''}` : localFailureCount ? `${localFailureCount} fonte(s) RSS falharam; nenhuma devolveu resultados.` : 'Nenhum resultado verificável encontrado nas fontes RSS configuradas.');
     }
   } catch (error) {
     renderApp();
