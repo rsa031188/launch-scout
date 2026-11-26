@@ -3,13 +3,82 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { xmlValue } from '../src/feed-parser.js';
+import { parseFeedEntries, readFeedBody, xmlValue } from '../src/feed-parser.js';
+import { createMcpClient, createMcpInitializeParams, createMcpRequest, parseMcpResponse } from '../src/mcp-client.js';
+import { isNonPublicAddress } from '../src/network-guards.js';
 import { extractPreviewImage, summaryPreview } from '../src/launch-utils.js';
 import { buildPanelContext, normalizeAgentResults, parseAgentJsonResponse } from '../src/agent-search.js';
 import { collectAgentSearchResults } from '../src/mcp-agents.js';
 
 assert.equal(xmlValue('<item><title lang="en">LaunchScout &amp; MCP</title></item>', 'title'), 'LaunchScout & MCP');
 assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></description></item>', 'description'), 'Local feed');
+assert.equal(await readFeedBody(new Response('feed body'), 20), 'feed body');
+await assert.rejects(readFeedBody(new Response('too large'), 4), /provider_response_too_large/);
+assert.equal(isNonPublicAddress('127.0.0.1'), true);
+assert.equal(isNonPublicAddress('100.64.0.1'), true);
+assert.equal(isNonPublicAddress('::ffff:7f00:1'), true);
+assert.equal(isNonPublicAddress('2001:4860:4860::8888'), false);
+assert.equal(isNonPublicAddress('192.0.0.8'), true);
+assert.equal(isNonPublicAddress('192.0.1.1'), false);
+assert.deepEqual(parseFeedEntries('<feed><entry><title>Evento</title><link rel="alternate" href="https://events.example/one?a=1&amp;b=2"/><updated>2026-01-01</updated><summary>Resumo</summary></entry></feed>', 'https://events.example/feed'), [{ title: 'Evento', link: 'https://events.example/one?a=1&b=2', date: '2026-01-01', summary: 'Resumo' }]);
+assert.deepEqual(parseFeedEntries('<rss><channel><item><title>Evento RSS</title><link>https://events.example/rss-event</link></item></channel></rss>', 'https://events.example/feed')[0], { title: 'Evento RSS', link: 'https://events.example/rss-event', date: '', summary: '' });
+assert.equal(parseFeedEntries('<feed><entry><title>Relativo</title><link href="../event" rel="alternate"/></entry></feed>', 'https://events.example/feeds/feed.xml')[0].link, 'https://events.example/event');
+assert.deepEqual(createMcpInitializeParams(), { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'LaunchScout', version: '1.0.0' } });
+assert.deepEqual(createMcpRequest('notifications/initialized', {}, 1), { jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+assert.deepEqual(createMcpRequest('tools/list', {}, 1), { jsonrpc: '2.0', method: 'tools/list', params: {}, id: 1 });
+assert.deepEqual(parseMcpResponse('text/event-stream', 'event: message\ndata: {"jsonrpc":"2.0","id":9,"method":"notifications/progress","params":{}}\n\nevent: message\ndata: {"jsonrpc":"2.0","id":10,"result":{"serverInfo":{"name":"MCP"},"protocolVersion":"2024-11-05"}}\n\n', 10), { serverInfo: { name: 'MCP' }, protocolVersion: '2024-11-05' });
+assert.equal(parseMcpResponse('text/event-stream', 'event: message\ndata: {"jsonrpc":"2.0","id":9,"result":{"wrong":"request"}}\n\n', 10), null);
+assert.throws(() => parseMcpResponse('application/json', '{bad', 1), /mcp_response_invalid_json/);
+const mcpRequests = [];
+const mcpClient = createMcpClient(async (_url, options) => {
+  const request = JSON.parse(options.body);
+  mcpRequests.push({ request, headers: new Headers(options.headers) });
+  if (request.method === 'initialize') {
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', serverInfo: { name: 'Test MCP' } } }), {
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'test-session' }
+    });
+  }
+  if (request.method === 'notifications/initialized') return new Response(null, { status: 202 });
+  return new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { structuredContent: { items: [] } } })}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' }
+  });
+});
+const testMcpConnection = { endpoint: 'https://mcp.example', token: 'test-token' };
+assert.equal((await mcpClient.call(testMcpConnection, 'initialize')).serverInfo.name, 'Test MCP');
+assert.equal(await mcpClient.call(testMcpConnection, 'tools/call', { name: 'search_launches' }).then((result) => result.structuredContent.items.length), 0);
+assert.deepEqual(mcpRequests.map(({ request }) => request.method), ['initialize', 'notifications/initialized', 'tools/call']);
+assert.equal(mcpRequests[0].request.params.protocolVersion, '2025-03-26');
+assert.equal(mcpRequests[0].headers.has('Mcp-Session-Id'), false);
+assert.equal(mcpRequests[1].request.id, undefined);
+assert.equal(mcpRequests[1].headers.get('mcp-protocol-version'), '2024-11-05');
+assert.equal(mcpRequests[1].headers.get('mcp-session-id'), 'test-session');
+assert.equal(mcpRequests[2].headers.get('mcp-session-id'), 'test-session');
+assert.equal(mcpRequests[2].headers.get('authorization'), 'Bearer test-token');
+const retryMethods = [];
+let expireFirstSession = true;
+let sessionNumber = 0;
+const retryMcpClient = createMcpClient(async (_url, options) => {
+  const request = JSON.parse(options.body);
+  retryMethods.push(request.method);
+  if (request.method === 'initialize') {
+    sessionNumber += 1;
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', serverInfo: { name: 'Retry MCP' } } }), {
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': `session-${sessionNumber}` }
+    });
+  }
+  if (request.method === 'notifications/initialized') return new Response(null, { status: 202 });
+  if (expireFirstSession) {
+    expireFirstSession = false;
+    return new Response('expired', { status: 404 });
+  }
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { structuredContent: { items: [] } } }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+});
+const retryMcpConnection = { endpoint: 'https://mcp.example' };
+await retryMcpClient.call(retryMcpConnection, 'initialize');
+await retryMcpClient.call(retryMcpConnection, 'tools/call', { name: 'search_launches' });
+assert.deepEqual(retryMethods, ['initialize', 'notifications/initialized', 'tools/call', 'initialize', 'notifications/initialized', 'tools/call']);
 assert.equal(summaryPreview('  A descrição   curta  '), 'A descrição curta');
 assert.equal([...summaryPreview('a'.repeat(205))].length, 200);
 assert.equal(summaryPreview('a'.repeat(205)).endsWith('…'), true);
@@ -24,6 +93,11 @@ const queriedAgents = [];
 const agentSearch = await collectAgentSearchResults(
   [{ id: 'agent-one' }, { id: 'agent-two' }, { id: 'agent-offline' }, { id: 'agent-tool-error' }],
   async (connection, method, params) => {
+    if (method === 'initialize') {
+      assert.equal(params.protocolVersion, '2025-03-26');
+      return { protocolVersion: '2024-11-05', serverInfo: { name: connection.id } };
+    }
+    if (method === 'notifications/initialized') return null;
     queriedAgents.push(connection.id);
     assert.equal(method, 'tools/call');
     assert.equal(params.name, 'search_launches');
@@ -78,7 +152,7 @@ const stopServer = async () => {
   });
 };
 const waitForServer = async () => { for (let attempt = 0; attempt < 60; attempt += 1) { try { const response = await fetch(`${base}/health`); if (response.ok) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error('server did not start'); };
-const request = async (url, options = {}) => { const response = await fetch(`${base}${url}`, { ...options, headers: { Accept: 'application/json', ...(options.headers || {}), ...(cookie ? { Cookie: cookie } : {}) } }); const setCookie = response.headers.get('set-cookie'); if (setCookie) cookie = setCookie.split(';')[0]; const body = await response.json(); return { response, body }; };
+const request = async (url, options = {}) => { const response = await fetch(`${base}${url}`, { ...options, headers: { Accept: 'application/json', ...(options.headers || {}), ...(cookie ? { Cookie: cookie } : {}) } }); const setCookie = response.headers.get('set-cookie'); if (setCookie) cookie = setCookie.split(';')[0]; const raw = await response.text(); let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch {} return { response, body }; };
 try {
   await waitForServer();
   const health = await request('/health');
@@ -87,6 +161,9 @@ try {
   assert.equal(unauthenticatedPreview.response.status, 401);
   const unauthenticatedAgentSearch = await request('/api/agent-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'Procuro eventos' }) });
   assert.equal(unauthenticatedAgentSearch.response.status, 401);
+  const unauthenticatedMcp = await request('/api/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: createMcpInitializeParams() }) });
+  assert.equal(unauthenticatedMcp.response.status, 401);
+  assert.equal(unauthenticatedMcp.response.headers.get('www-authenticate'), 'Bearer');
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'LaunchScout', password: 'Launch_admin' }) });
   assert.equal(login.response.status, 200);
   assert.ok(login.body.csrfToken);
@@ -135,6 +212,13 @@ try {
   const providers = await request('/api/admin/providers');
   assert.equal(providers.response.status, 200);
   assert.equal(providers.body.providers[0].id, 'provider-test');
+  const invalidDateSearch = await request('/api/search/discover', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken },
+    body: JSON.stringify({ date_from: 'not-a-date' })
+  });
+  assert.equal(invalidDateSearch.response.status, 400);
+  assert.equal(invalidDateSearch.body.error.code, 'invalid_date_filter');
   const providerUpdated = await request('/api/admin/providers/provider-test', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken }, body: JSON.stringify({ name: 'Feed atualizado', enabled: false }) });
   assert.equal(providerUpdated.response.status, 200);
   assert.equal(providerUpdated.body.provider.name, 'Feed atualizado');
@@ -174,12 +258,19 @@ try {
   child = spawn(process.execPath, ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   await waitForServer();
   assert.deepEqual(await fs.readFile(path.join(dataDir, 'mcp-master.key')), masterKey);
-  const persistedTokenResponse = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${generated.body.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) });
+  const persistedTokenResponse = await request('/api/mcp', { method: 'POST', headers: { Authorization: `bearer ${generated.body.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) });
   assert.equal(persistedTokenResponse.response.status, 200);
   const firstToken = generated.body.token;
-  const initialized = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
+  const initialized = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: createMcpInitializeParams() }) });
   assert.equal(initialized.response.status, 200);
   assert.equal(initialized.body.result.serverInfo.name, 'LaunchScout Unified MCP');
+  assert.equal(initialized.body.result.protocolVersion, '2025-03-26');
+  const invalidInitialize = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
+  assert.equal(invalidInitialize.body.error.code, -32602);
+  const initializedNotification = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) });
+  assert.equal(initializedNotification.response.status, 202);
+  const invalidMcpRequest = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'ping' }) });
+  assert.equal(invalidMcpRequest.response.status, 400);
   const listedTools = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) });
   assert.equal(listedTools.response.status, 200);
   const searchTool = listedTools.body.result.tools.find((tool) => tool.name === 'search_launches');

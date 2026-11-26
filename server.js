@@ -6,7 +6,8 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
-import { xmlValue } from './src/feed-parser.js';
+import { parseFeedEntries, readFeedBody, xmlValue } from './src/feed-parser.js';
+import { isNonPublicAddress } from './src/network-guards.js';
 import { extractPreviewImage, safeWebUrl } from './src/launch-utils.js';
 import { buildPanelContext, normalizeAgentResults, parseAgentJsonResponse } from './src/agent-search.js';
 
@@ -20,6 +21,7 @@ const VERSION = '3.0.0';
 const SESSION_COOKIE = 'launchscout_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const MAX_BODY = 1024 * 1024;
+const MAX_FEED_RESPONSE = 2_000_000;
 const MAX_SEARCH_RESULTS = 300;
 const MAX_PROVIDER_IMPORT = 100;
 const rateBuckets = new Map();
@@ -93,15 +95,14 @@ function getMasterKey() {
 }
 function encryptSecret(secret) { const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', getMasterKey(), iv); const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]); return { ciphertext: ciphertext.toString('base64'), iv: iv.toString('base64'), authTag: cipher.getAuthTag().toString('base64') }; }
 function decryptSecret(mcp) { if (!mcp?.ciphertext) return ''; const decipher = crypto.createDecipheriv('aes-256-gcm', getMasterKey(), Buffer.from(mcp.iv, 'base64')); decipher.setAuthTag(Buffer.from(mcp.authTag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(mcp.ciphertext, 'base64')), decipher.final()]).toString('utf8'); }
-function bearer(req) { const header = text(req.headers.authorization); return header.startsWith('Bearer ') ? header.slice(7).trim() : ''; }
+function bearer(req) { const header = text(req.headers.authorization); const match = header.match(/^Bearer\s+(.+)$/i); return match ? match[1].trim() : ''; }
 function fixedMcpToken() { return text(process.env.MCP_FIXED_TOKEN); }
 function validMcpToken(req, store) { const token = bearer(req); const fixed = fixedMcpToken(); return Boolean(token && ((fixed && fixed.length >= 32 && safeEqual(token, fixed)) || (store.mcp.hash && safeEqual(sha256(token), store.mcp.hash)))); }
 function currentSession(req, store) { const raw = parseCookies(req)[SESSION_COOKIE]; if (!raw) return null; const hashed = sha256(raw); const session = store.sessions.find((item) => item.hash === hashed && new Date(item.expiresAt).getTime() > Date.now()); if (!session) return null; const user = store.users.find((item) => item.id === session.userId); return user ? { session, user } : null; }
 function requireSession(req, res, store, role = null) { const auth = currentSession(req, store); if (!auth) { error(res, 401, 'authentication_required', 'É necessário iniciar sessão.'); return null; } if (role && auth.user.role !== role) { error(res, 403, 'admin_required', 'Esta operação requer uma sessão administrativa.'); return null; } if (req.method !== 'GET' && csrfFrom(req) !== auth.session.csrf) { error(res, 403, 'csrf_invalid', 'Token CSRF inválido ou ausente.'); return null; } return auth; }
 function rateLimit(req, res, key, limit = 20, windowMs = 60000) { const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0]; const bucketKey = `${key}:${ip}`; const bucket = rateBuckets.get(bucketKey) || { count: 0, reset: Date.now() + windowMs }; if (Date.now() > bucket.reset) { bucket.count = 0; bucket.reset = Date.now() + windowMs; } bucket.count += 1; rateBuckets.set(bucketKey, bucket); if (bucket.count > limit) { res.setHeader('Retry-After', Math.ceil((bucket.reset - Date.now()) / 1000)); error(res, 429, 'rate_limited', 'Muitas tentativas. Aguarde antes de tentar novamente.'); return false; } return true; }
 async function readBody(req) { let size = 0; const chunks = []; for await (const chunk of req) { size += chunk.length; if (size > MAX_BODY) throw new Error('body_too_large'); chunks.push(chunk); } if (!chunks.length) return {}; return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-function privateIp(address) { if (net.isIPv4(address)) { const parts = address.split('.').map(Number); return parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168); } const normalized = address.toLowerCase(); return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:') || normalized === '::'; }
-async function assertPublicUrl(value) { let parsed; try { parsed = new URL(String(value)); } catch { throw new Error('provider_url_invalid'); } if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('provider_url_invalid'); if (net.isIP(parsed.hostname) && privateIp(parsed.hostname)) throw new Error('provider_private_address'); if (parsed.port && !['80', '443', '8080', '8443'].includes(parsed.port)) throw new Error('provider_port_not_allowed'); const addresses = await dns.lookup(parsed.hostname, { all: true }); if (!addresses.length || addresses.some(({ address }) => privateIp(address))) throw new Error('provider_private_address'); return parsed.toString(); }
+async function assertPublicUrl(value) { let parsed; try { parsed = new URL(String(value)); } catch { throw new Error('provider_url_invalid'); } if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('provider_url_invalid'); const hostname = parsed.hostname.replace(/^\[|\]$/g, ''); if (parsed.port && !['80', '443', '8080', '8443'].includes(parsed.port)) throw new Error('provider_port_not_allowed'); if (net.isIP(hostname)) { if (isNonPublicAddress(hostname)) throw new Error('provider_private_address'); return parsed.toString(); } const addresses = await dns.lookup(hostname, { all: true }); if (!addresses.length || addresses.some(({ address }) => isNonPublicAddress(address))) throw new Error('provider_private_address'); return parsed.toString(); }
 async function readPreviewHtml(response) {
   const contentLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > 512_000) throw new Error('event_preview_too_large');
@@ -272,8 +273,65 @@ async function validateAgentResults(items) {
   }
   return results;
 }
-async function fetchProvider(provider) { const url = await assertPublicUrl(provider.url); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), Math.min(15000, Math.max(1000, Number(provider.timeoutMs || 10000)))); try { const response = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/plain;q=0.8' } }); if (!response.ok) throw new Error(`provider_http_${response.status}`); const body = await response.text(); if (body.length > 2_000_000) throw new Error('provider_response_too_large'); const blocks = [...body.matchAll(/<(?:item|entry)\b[\s\S]*?<\/(?:item|entry)>/gi)].map((match) => match[0]); return blocks.map((block, index) => { const title = xmlValue(block, 'title'); const linkMatch = block.match(/<link(?:\s+[^>]*)?>([\s\S]*?)<\/link>/i); const link = (linkMatch ? linkMatch[1] : '').replace(/<!\[CDATA\[|\]\]>/g, '').trim(); const date = xmlValue(block, 'pubDate') || xmlValue(block, 'published') || xmlValue(block, 'updated'); const summary = xmlValue(block, 'description') || xmlValue(block, 'summary') || xmlValue(block, 'content'); if (!title) return null; return normalizeLaunch({ title, summary, producer: provider.name, product_type: provider.category || 'Lançamento', event_date: date || '', registration_url: link || url, source: provider.name, category: provider.category || 'RSS', language: provider.language || '', verification: 'partial', discovered_at: now(), score: Math.max(1, 100 - index) }); }).filter(Boolean); } finally { clearTimeout(timeout); } }
-async function discoverExternal(store, args = {}) { const enabled = store.providers.filter((provider) => provider.enabled && provider.type === 'rss' && provider.url); const results = []; const sources = []; const failures = []; await Promise.all(enabled.map(async (provider) => { try { const items = await fetchProvider(provider); provider.status = 'online'; provider.lastSearchAt = now(); provider.lastError = ''; sources.push({ id: provider.id, name: provider.name, type: provider.type, status: 'online', count: items.length }); results.push(...items); } catch (e) { provider.status = 'error'; provider.lastSearchAt = now(); provider.lastError = e.message; failures.push({ id: provider.id, name: provider.name, error: e.message }); } })); const query = text(args.query || args.event_name).toLowerCase(); const filtered = results.filter((item) => !query || [item.title, item.summary, item.producer, item.category].join(' ').toLowerCase().includes(query)); const unique = [...new Map(filtered.map((item) => [`${item.title.toLowerCase()}|${item.registrationUrl}`, item])).values()]; for (const item of unique) { const existing = store.launches.find((entry) => entry.registrationUrl === item.registrationUrl && entry.title.toLowerCase() === item.title.toLowerCase()); if (existing) Object.assign(existing, { ...item, id: existing.id }); else store.launches.unshift(item); } store.searchHistory.unshift({ id: id(), query: args.query || args.event_name || '', at: now(), providers: sources.length, results: unique.length, failures: failures.length }); store.searchHistory = store.searchHistory.slice(0, 200); writeStore(store); const requestedLimit = Number(args.limit); const limit = Number.isFinite(requestedLimit) ? Math.min(MAX_SEARCH_RESULTS, Math.max(1, requestedLimit)) : MAX_SEARCH_RESULTS; return { items: unique.slice(0, limit).map((item) => publicLaunch(item, null, store)), sources, failures, provider_status: enabled.length ? (failures.length ? 'partial' : 'online') : 'not_configured' }; }
+async function fetchProvider(provider) { const url = await assertPublicUrl(provider.url); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), Math.min(15000, Math.max(1000, Number(provider.timeoutMs || 10000)))); try { const response = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/plain;q=0.8' } }); if (!response.ok) throw new Error(`provider_http_${response.status}`); const body = await readFeedBody(response, MAX_FEED_RESPONSE); return parseFeedEntries(body, url).map((entry, index) => normalizeLaunch({ title: entry.title, summary: entry.summary, producer: provider.name, product_type: provider.category || 'Lançamento', event_date: Number.isFinite(Date.parse(entry.date)) ? new Date(entry.date).toISOString() : '', registration_url: entry.link || url, source: provider.name, category: provider.category || 'RSS', language: provider.language || '', verification: 'partial', discovered_at: now(), score: Math.max(1, 100 - index) })); } finally { clearTimeout(timeout); } }
+async function discoverExternal(store, args = {}) {
+  const enabled = store.providers.filter((provider) => provider.enabled && provider.type === 'rss' && provider.url);
+  const providerResults = new Array(enabled.length);
+  let nextProvider = 0;
+  const workerCount = Math.min(8, enabled.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextProvider < enabled.length) {
+      const index = nextProvider++;
+      const provider = enabled[index];
+      try {
+        const items = await fetchProvider(provider);
+        provider.status = 'online';
+        provider.lastSearchAt = now();
+        provider.lastError = '';
+        providerResults[index] = { items, source: { id: provider.id, name: provider.name, type: provider.type, status: 'online', count: items.length } };
+      } catch (e) {
+        provider.status = 'error';
+        provider.lastSearchAt = now();
+        provider.lastError = e.message;
+        providerResults[index] = { items: [], failure: { id: provider.id, name: provider.name, error: e.message } };
+      }
+    }
+  }));
+  const sources = providerResults.flatMap((result) => result?.source ? [result.source] : []);
+  const failures = providerResults.flatMap((result) => result?.failure ? [result.failure] : []);
+  const results = providerResults.flatMap((result) => result?.items || []);
+  const query = text(args.query || args.event_name).toLowerCase();
+  const producer = text(args.producer_name).toLowerCase();
+  const source = text(args.source).toLowerCase();
+  const productType = text(args.product_type || args.category).toLowerCase();
+  const dateFrom = args.date_from ? Date.parse(args.date_from) : null;
+  const dateTo = args.date_to ? Date.parse(`${text(args.date_to)}T23:59:59`) : null;
+  if ((dateFrom !== null && !Number.isFinite(dateFrom)) || (dateTo !== null && !Number.isFinite(dateTo))) throw new Error('invalid_date_filter');
+  const filtered = results.filter((item) => {
+    if (query && ![item.title, item.summary, item.producer, item.category].join(' ').toLowerCase().includes(query)) return false;
+    if (producer && !item.producer.toLowerCase().includes(producer)) return false;
+    if (source && !item.source.toLowerCase().includes(source)) return false;
+    if (productType && ![item.productType, item.category].join(' ').toLowerCase().includes(productType)) return false;
+    if (args.verification && item.verification !== args.verification) return false;
+    if (dateFrom !== null || dateTo !== null) {
+      const eventDate = Date.parse(item.eventDate);
+      if (!Number.isFinite(eventDate) || (dateFrom !== null && eventDate < dateFrom) || (dateTo !== null && eventDate > dateTo)) return false;
+    }
+    return true;
+  });
+  const unique = [...new Map(filtered.map((item) => [`${item.title.toLowerCase()}|${item.registrationUrl}`, item])).values()];
+  for (const item of unique) {
+    const existing = store.launches.find((entry) => entry.registrationUrl === item.registrationUrl && entry.title.toLowerCase() === item.title.toLowerCase());
+    if (existing) Object.assign(existing, { ...item, id: existing.id });
+    else store.launches.unshift(item);
+  }
+  store.searchHistory.unshift({ id: id(), query: args.query || args.event_name || '', at: now(), providers: sources.length, results: unique.length, failures: failures.length });
+  store.searchHistory = store.searchHistory.slice(0, 200);
+  writeStore(store);
+  const requestedLimit = Number(args.limit);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(MAX_SEARCH_RESULTS, Math.max(1, requestedLimit)) : MAX_SEARCH_RESULTS;
+  return { items: unique.slice(0, limit).map((item) => publicLaunch(item, null, store)), sources, failures, provider_status: enabled.length ? (failures.length ? 'partial' : 'online') : 'not_configured' };
+}
 function normalizeLaunch(input, existingId = id()) { const safeUrl = (value) => { try { const u = new URL(String(value)); return ['http:', 'https:'].includes(u.protocol) ? u.toString() : ''; } catch { return ''; } }; return { id: existingId, title: text(input.title), summary: text(input.summary), producer: text(input.producer), productType: text(input.productType || input.product_type || input.type), eventDate: text(input.eventDate || input.event_date || input.date), registrationUrl: safeUrl(input.registrationUrl || input.registration_url || input.registration || input.url), imageUrl: safeUrl(input.imageUrl || input.image_url || input.image), source: text(input.source), category: text(input.category), country: text(input.country), language: text(input.language), score: Math.min(100, Math.max(0, Number(input.score || 0))), verification: ['confirmed', 'partial', 'unverified', 'expired'].includes(input.verification) ? input.verification : 'unverified', discoveredAt: text(input.discoveredAt || input.discovered_at || now()), updatedAt: now() }; }
 function publicLaunch(item, userId = null, store = null) { const saved = Boolean(userId && store?.favorites.some((fav) => fav.userId === userId && fav.launchId === item.id)); return { id: item.id, title: item.title, summary: item.summary, producer: item.producer, product_type: item.productType, date: item.eventDate, registration: item.registrationUrl, image: item.imageUrl, source: item.source, category: item.category, country: item.country, language: item.language, score: item.score, verification: item.verification, discoveredAt: item.discoveredAt, updatedAt: item.updatedAt, saved }; }
 function searchLaunches(store, args = {}, userId = null) { const q = text(args.query || args.event_name).toLowerCase(); const items = store.launches.filter((item) => { const hay = [item.title, item.summary, item.producer, item.productType, item.category, item.source, item.country, item.language].join(' ').toLowerCase(); if (q && !hay.includes(q)) return false; if (args.producer_name && !item.producer.toLowerCase().includes(text(args.producer_name).toLowerCase())) return false; for (const [key, field] of [['source', 'source'], ['product_type', 'productType'], ['category', 'category'], ['verification', 'verification']]) if (args[key] && !String(item[field]).toLowerCase().includes(text(args[key]).toLowerCase())) return false; if (args.date_from && item.eventDate < text(args.date_from)) return false; if (args.date_to && item.eventDate > `${text(args.date_to)}T23:59:59`) return false; return true; }); const sort = args.sort_by || 'score'; items.sort((a, b) => sort === 'date' ? String(a.eventDate).localeCompare(String(b.eventDate)) : sort === 'name' ? a.title.localeCompare(b.title) : Number(b.score) - Number(a.score)); const offset = Math.max(0, Number(args.offset || 0)); const requestedLimit = Number(args.limit || 50); const limit = Number.isFinite(requestedLimit) ? Math.min(MAX_SEARCH_RESULTS, Math.max(1, requestedLimit)) : 50; const page = items.slice(offset, offset + limit).map((item) => publicLaunch(item, userId, store)); return { items: page, count: page.length, total: items.length, next_offset: offset + page.length < items.length ? offset + page.length : null }; }
@@ -305,7 +363,42 @@ async function callTool(store, name, args, userId = null) { const match = toolDe
 }
 function rpcResult(idValue, result) { return { jsonrpc: '2.0', id: idValue, result }; }
 function rpcError(idValue, code, message, data) { return { jsonrpc: '2.0', id: idValue, error: { code, message, ...(data ? { data } : {}) } }; }
-async function handleMcp(req, res, store) { if (req.method === 'GET') return json(res, 200, { status: 'ok', service: 'LaunchScout Unified MCP', version: VERSION, endpoint: '/api/mcp', authentication: 'Bearer token required' }); if (req.method !== 'POST') return error(res, 405, 'method_not_allowed', 'Método não permitido.'); if (!validMcpToken(req, store)) return error(res, 401, 'unauthorized', 'Bearer token inválido ou ausente.'); let payload; try { payload = await readBody(req); } catch (e) { return error(res, 400, e.message === 'body_too_large' ? 'body_too_large' : 'invalid_json', 'Corpo JSON inválido.'); } const requestId = payload.id ?? null; const method = text(payload.method); if (method === 'initialize') return json(res, 200, rpcResult(requestId, { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'LaunchScout Unified MCP', version: VERSION } })); if (method === 'ping') return json(res, 200, rpcResult(requestId, {})); if (method === 'tools/list') return json(res, 200, rpcResult(requestId, { tools: toolDefinitions() })); if (method === 'tools/call') { try { const result = await callTool(store, text(payload.params?.name), payload.params?.arguments || {}); return json(res, 200, rpcResult(requestId, { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false })); } catch (e) { return json(res, 200, rpcError(requestId, e.message === 'unknown_tool' ? -32601 : -32602, e.message === 'unknown_tool' ? 'Ferramenta desconhecida.' : 'Parâmetros inválidos ou operação falhou.')); } } return json(res, 200, rpcError(requestId, -32601, 'Método MCP não encontrado.')); }
+async function handleMcp(req, res, store) {
+  if (req.method === 'GET') return json(res, 200, { status: 'ok', service: 'LaunchScout Unified MCP', version: VERSION, endpoint: '/api/mcp', authentication: 'Bearer token required' });
+  if (req.method !== 'POST') return error(res, 405, 'method_not_allowed', 'Método não permitido.');
+  if (!validMcpToken(req, store)) return json(res, 401, { ok: false, error: { code: 'unauthorized', message: 'Bearer token inválido ou ausente.' } }, { 'WWW-Authenticate': 'Bearer' });
+  let payload;
+  try {
+    payload = await readBody(req);
+  } catch (e) {
+    return error(res, 400, e.message === 'body_too_large' ? 'body_too_large' : 'invalid_json', 'Corpo JSON inválido.');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.jsonrpc !== '2.0' || typeof payload.method !== 'string') {
+    return error(res, 400, 'invalid_jsonrpc_request', 'Pedido JSON-RPC inválido.');
+  }
+  const requestId = payload.id ?? null;
+  const method = text(payload.method);
+  if (requestId === null && method.startsWith('notifications/')) return res.writeHead(202, { 'Cache-Control': 'no-store' }).end();
+  if (method === 'initialize') {
+    const params = payload.params;
+    if (!params || typeof params.protocolVersion !== 'string' || !params.capabilities || typeof params.capabilities !== 'object' || !params.clientInfo || typeof params.clientInfo !== 'object') {
+      return json(res, 200, rpcError(requestId, -32602, 'Parâmetros de inicialização MCP inválidos.'));
+    }
+    const protocolVersion = params.protocolVersion === '2025-03-26' ? '2025-03-26' : '2024-11-05';
+    return json(res, 200, rpcResult(requestId, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'LaunchScout Unified MCP', version: VERSION } }));
+  }
+  if (method === 'ping') return json(res, 200, rpcResult(requestId, {}));
+  if (method === 'tools/list') return json(res, 200, rpcResult(requestId, { tools: toolDefinitions() }));
+  if (method === 'tools/call') {
+    try {
+      const result = await callTool(store, text(payload.params?.name), payload.params?.arguments || {});
+      return json(res, 200, rpcResult(requestId, { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }));
+    } catch (e) {
+      return json(res, 200, rpcError(requestId, e.message === 'unknown_tool' ? -32601 : -32602, e.message === 'unknown_tool' ? 'Ferramenta desconhecida.' : 'Parâmetros inválidos ou operação falhou.'));
+    }
+  }
+  return json(res, 200, rpcError(requestId, -32601, 'Método MCP não encontrado.'));
+}
 async function authRoute(req, res, store, pathname) {
   if (pathname === '/api/auth/bootstrap' && req.method === 'GET') return json(res, 200, { ok: true, required: store.users.length === 0, registration: true });
   if (pathname === '/api/auth/bootstrap' && req.method === 'POST') { if (!rateLimit(req, res, 'bootstrap', 5)) return; if (store.users.length) return error(res, 409, 'bootstrap_complete', 'O administrador inicial já foi criado.'); const secret = text(req.headers['x-bootstrap-secret']); if (!process.env.LAUNCHSCOUT_BOOTSTRAP_SECRET || !safeEqual(secret, process.env.LAUNCHSCOUT_BOOTSTRAP_SECRET)) return error(res, 403, 'bootstrap_denied', 'Segredo de bootstrap inválido.'); const input = await readBody(req).catch(() => null); if (!input || text(input.password).length < 12 || !text(input.email).includes('@')) return error(res, 400, 'invalid_admin', 'Informe nome, e-mail válido e password com pelo menos 12 caracteres.'); const user = { id: id(), name: text(input.name || 'Administrador'), email: text(input.email).toLowerCase(), passwordHash: await bcrypt.hash(text(input.password), 12), role: 'admin', createdAt: now() }; store.users.push(user); audit(store, 'admin_bootstrapped', user.id); writeStore(store); return json(res, 201, { ok: true, user: { id: user.id, name: user.name, email: user.email, role: user.role } }); }
@@ -322,7 +415,7 @@ async function authRoute(req, res, store, pathname) {
 function serveStatic(req, res) { let requestPath = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname; if (requestPath === '/') requestPath = '/index.html'; const file = path.normalize(path.join(DIST_DIR, requestPath)); if (!file.startsWith(DIST_DIR)) return error(res, 403, 'forbidden', 'Acesso negado.'); fs.readFile(file, (readError, data) => { if (readError) return fs.readFile(path.join(DIST_DIR, 'index.html'), (fallbackError, fallback) => fallbackError ? error(res, 404, 'not_found', 'Recurso não encontrado.') : (res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }), res.end(fallback))); const ext = path.extname(file); const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' }; res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' }); res.end(data); }); }
 function ensureDefaultAdmin() { ensureStore(); const store = readStore(); if (process.env.LAUNCHSCOUT_DEFAULT_ADMIN !== 'false' && store.users.length) { const legacy = store.users.find((user) => text(user.email).toLowerCase() === 'admin' && user.mustChangePassword && bcrypt.compareSync('admin', user.passwordHash)); if (legacy) { legacy.email = 'LaunchScout'; legacy.passwordHash = bcrypt.hashSync('Launch_admin', 12); audit(store, 'default_admin_credentials_migrated', legacy.id); writeStore(store); console.warn('WARNING: credencial inicial migrada para LaunchScout/Launch_admin. Altere-a imediatamente e defina LAUNCHSCOUT_DEFAULT_ADMIN=false.'); } } if (!store.users.length && process.env.LAUNCHSCOUT_DEFAULT_ADMIN !== 'false') { const user = { id: id(), name: 'Administrador', email: 'LaunchScout', passwordHash: bcrypt.hashSync('Launch_admin', 12), role: 'admin', createdAt: now(), mustChangePassword: true }; store.users.push(user); audit(store, 'default_admin_created', user.id); writeStore(store); console.warn('WARNING: credencial inicial LaunchScout/Launch_admin ativa. Altere-a imediatamente e defina LAUNCHSCOUT_DEFAULT_ADMIN=false.'); } }
 ensureDefaultAdmin();
-const server = http.createServer(async (req, res) => { res.setHeader('X-Frame-Options', 'SAMEORIGIN'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'); if (process.env.CORS_ORIGIN) { res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN); res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-CSRF-Token'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); res.setHeader('Vary', 'Origin'); } if (req.method === 'OPTIONS') return res.writeHead(204).end(); const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname; const store = readStore(); try {
+const server = http.createServer(async (req, res) => { res.setHeader('X-Frame-Options', 'SAMEORIGIN'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'); if (process.env.CORS_ORIGIN) { res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN); res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-CSRF-Token, Mcp-Protocol-Version, Mcp-Session-Id'); res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); res.setHeader('Vary', 'Origin'); } if (req.method === 'OPTIONS') return res.writeHead(204).end(); const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname; const store = readStore(); try {
     if (pathname === '/api/mcp') return handleMcp(req, res, store);
     if ((pathname === '/health' || pathname === '/api/health') && req.method === 'GET') return json(res, 200, { ok: true, service: 'LaunchScout Unified', version: VERSION, runtime: 'node', api: true });
     if (pathname.startsWith('/api/auth/') || pathname === '/api/account') { const handled = await authRoute(req, res, store, pathname); if (handled !== false) return; }
@@ -330,7 +423,7 @@ const server = http.createServer(async (req, res) => { res.setHeader('X-Frame-Op
     if (pathname === '/api/auth/generate' && req.method === 'POST') { const auth = requireSession(req, res, store, 'admin'); if (!auth) return; const fixed = fixedMcpToken(); if (fixed) { if (fixed.length < 32) return error(res, 503, 'mcp_fixed_token_invalid', 'MCP_FIXED_TOKEN deve ter pelo menos 32 caracteres.'); return json(res, 200, { ok: true, token: fixed, fixed: true, replaced: false, warning: 'Token MCP fixo configurado no ambiente. Para o alterar, substitua MCP_FIXED_TOKEN e reinicie a aplicação.' }); } const wasConfigured = Boolean(store.mcp.hash); const token = `lr_${crypto.randomBytes(32).toString('hex')}`; let encrypted; try { encrypted = encryptSecret(token); } catch (e) { if (e.message?.startsWith('MCP_MASTER_KEY')) return error(res, 503, 'mcp_key_not_configured', `${e.message} Configure-a no ambiente do servidor e reinicie a aplicação.`); throw e; } const timestamp = now(); store.mcp = { ...store.mcp, ...encrypted, hash: sha256(token), createdAt: store.mcp.createdAt || timestamp, rotatedAt: timestamp, revokedAt: '' }; audit(store, wasConfigured ? 'mcp_token_rotated' : 'mcp_token_created', auth.user.id); writeStore(store); return json(res, 200, { ok: true, token, rotatedAt: timestamp, replaced: wasConfigured, warning: 'Copie o token agora. O servidor guarda a credencial cifrada e o hash, nunca o texto puro.' }); }
     if (pathname === '/api/auth/recover' && req.method === 'POST') { const auth = requireSession(req, res, store, 'admin'); if (!auth) return; const fixed = fixedMcpToken(); if (fixed) { if (fixed.length < 32) return error(res, 503, 'mcp_fixed_token_invalid', 'MCP_FIXED_TOKEN deve ter pelo menos 32 caracteres.'); return json(res, 200, { ok: true, token: fixed, fixed: true, replaced: false, warning: 'Token MCP fixo configurado no ambiente. Para o alterar, substitua MCP_FIXED_TOKEN e reinicie a aplicação.' }); } const token = `lr_${crypto.randomBytes(32).toString('hex')}`; const encrypted = encryptSecret(token); const timestamp = now(); store.mcp = { ...store.mcp, ...encrypted, hash: sha256(token), createdAt: store.mcp.createdAt || timestamp, rotatedAt: timestamp, revokedAt: '' }; audit(store, 'mcp_token_recovered', auth.user.id); writeStore(store); return json(res, 200, { ok: true, token, rotatedAt: timestamp, replaced: true, warning: 'Token recuperado e credencial anterior invalidada imediatamente.' }); }
     if (pathname === '/api/auth/revoke' && req.method === 'POST') { const auth = requireSession(req, res, store, 'admin'); if (!auth) return; if (fixedMcpToken()) return error(res, 409, 'mcp_fixed_token_configured', 'O token MCP é fixo e é gerido por MCP_FIXED_TOKEN. Altere a variável e reinicie a aplicação para o substituir.'); const timestamp = now(); store.mcp = { ciphertext: '', iv: '', authTag: '', hash: '', createdAt: store.mcp.createdAt, rotatedAt: store.mcp.rotatedAt, revokedAt: timestamp }; audit(store, 'mcp_token_revoked', auth.user.id); writeStore(store); return json(res, 200, { ok: true, revoked: true, revokedAt: timestamp }); }
-    if (pathname === '/api/search/discover' && req.method === 'POST') { const auth = requireSession(req, res, store); if (!auth) return; const input = await readBody(req); const result = await discoverExternal(store, input || {}); return json(res, 200, { ok: true, ...result }); }
+    if (pathname === '/api/search/discover' && req.method === 'POST') { const auth = requireSession(req, res, store); if (!auth) return; const input = await readBody(req) || {}; if ([input.date_from, input.date_to].some((date) => date && !Number.isFinite(Date.parse(date)))) return error(res, 400, 'invalid_date_filter', 'Informe datas válidas para filtrar a pesquisa.'); const result = await discoverExternal(store, input); return json(res, 200, { ok: true, ...result }); }
     if (pathname === '/api/event-preview' && req.method === 'GET') {
       const auth = requireSession(req, res, store);
       if (!auth) return;
