@@ -82,4 +82,6 @@ O formulário pesquisa por nome do evento/lançamento e texto livre, além de fi
 
 Se todos os agentes falharem, o sistema exibe o erro de conexão e não injeta resultados de demonstração. Verifique endpoint, token e CORS em **Configurações MCP** no LaunchScout.
 
+As fontes RSS locais e todos os agentes MCP habilitados são consultados na mesma pesquisa; os agentes MCP são chamados em paralelo e seus resultados são combinados com os RSS locais. Uma falha individual não descarta as respostas dos demais agentes.
+
 Se o arquivo `data/launchscout.json` estiver corrompido, o servidor preserva uma cópia com sufixo `.corrupt-*`, recria um armazenamento válido e permite gerar um novo token. Caso já exista um token e ele tenha sido perdido, informe o token atual ou faça a recuperação do arquivo de dados no servidor antes de gerar outro.
