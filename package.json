@@ -2,17 +2,21 @@
   "name": "launchscout",
   "version": "3.0.0",
   "private": true,
+  "main": "dist/main.js",
   "type": "module",
   "engines": {
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "npm run build && node server.js",
-    "build": "vite build",
+    "setup:local": "node scripts/setup-local.mjs",
+    "dev": "npm run build && npm run setup:local && node --env-file-if-exists=.env server.js",
+    "build": "vite build && node scripts/prepare-hostinger.mjs",
     "test": "node tests/smoke.mjs",
-    "preview": "vite preview --host 0.0.0.0",
-    "start": "node server.js",
-    "start:production": "npm run build && node server.js"
+    "preview": "npm start",
+    "preview:static": "vite preview --host 0.0.0.0",
+    "start": "npm run setup:local && node --env-file-if-exists=.env server.js",
+    "start:prod": "node --env-file-if-exists=.env dist/main.js",
+    "start:production": "npm run build && npm run setup:local && npm run start:prod"
   },
   "devDependencies": {
     "vite": "^8.3.8"

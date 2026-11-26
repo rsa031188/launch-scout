@@ -540,4 +540,4 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.settingsOpen) { state.settingsOpen = false; renderApp(); }
 });
 
-fetch('/api/auth/me').then((response) => response.json()).then(async (payload) => { state.auth = payload.authenticated ? payload.user : null; renderApp(); if (state.auth) await hydrateCatalog(); }).catch(() => { state.auth = null; renderApp(); });
+fetch('/api/auth/me').then((response) => response.json()).then(async (payload) => { state.auth = payload.authenticated ? payload.user : null; state.csrfToken = state.auth ? payload.csrfToken || '' : ''; renderApp(); if (state.auth) await hydrateCatalog(); }).catch(() => { state.auth = null; state.csrfToken = ''; renderApp(); });
