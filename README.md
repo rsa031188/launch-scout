@@ -5,10 +5,12 @@ LaunchScout é um radar pessoal para descobrir, organizar e acompanhar lançamen
 ## Funcionalidades
 
 - Dashboard e catálogo com pesquisa, filtros, ordenação e lista de favoritos.
+- O radar pode carregar e exibir até 300 resultados simultaneamente.
 - Contas com registo e login; a conta administrativa controla configurações e provedores.
 - Pesquisa de feeds RSS públicos, com resultados e histórico guardados no servidor.
 - Cadastro individual de feeds RSS ou importação em lote a partir de um arquivo JSON.
 - Cards com descrições limitadas a 200 caracteres e imagens de pré-visualização das páginas dos eventos quando disponíveis.
+- Modo agente para pesquisa contextual com Exa AI ou uma API de chat compatível com OpenAI.
 - Conexões MCP para pesquisar em agentes externos; os resultados podem ser combinados com os feeds RSS.
 - API MCP com ferramentas de descoberta, pesquisa, gestão de lançamentos e consulta do estado da plataforma.
 - Interface responsiva em português.
@@ -165,6 +167,15 @@ Uma automação externa pode chamar `discover_launches` em uma agenda própria, 
 ```
 
 Envie esse corpo por `POST` ao endpoint MCP, com `Content-Type: application/json` e `Authorization: Bearer <token>`. A chamada consulta os feeds habilitados, atualiza os lançamentos encontrados e registra o histórico. A periodicidade, as notificações e as novas tentativas pertencem ao serviço externo de automação; o LaunchScout não cria nem executa agendas automaticamente. Sem fontes RSS ou agentes externos configurados, não haverá dados novos.
+
+### Modo agente e chave de API
+
+Administradores podem configurar a pesquisa contextual em **Configurações MCP → Modo agente**. A chave é enviada ao servidor por uma sessão autenticada, cifrada com `MCP_MASTER_KEY` e nunca devolvida ao navegador. O modo agente não usa a chave MCP nem as chaves dos feeds RSS.
+
+- **Exa AI Search:** escolha Exa AI Search e informe uma chave criada na conta Exa. A busca web usa a API oficial do Exa e devolve resultados com título, resumo e link.
+- **API compatível com OpenAI:** escolha a opção, informe uma chave, o endpoint HTTPS público (por exemplo `https://api.openai.com/v1`) e o identificador do modelo. O endpoint deve aceitar `POST /chat/completions` e retornar JSON com `answer` e `results`, onde cada resultado possui `title` e `url`.
+
+Defina também o **Contexto do radar** com os temas, público ou tipos de oportunidade relevantes. A pergunta é combinada com esse contexto, os filtros ativos no painel e as categorias das fontes RSS habilitadas. A pesquisa respeita os limites do provedor, retorna no máximo dez resultados e rejeita links que não apontem para URLs HTTPS/HTTP públicas. O Modo agente exige login; sua configuração é administrativa, e as pesquisas autenticadas têm limite de requisições. O uso da API pode gerar cobrança ou consumir a quota da conta do provedor. Sem chave configurada, nenhum pedido é enviado.
 
 ## Dados, backups e segurança
 

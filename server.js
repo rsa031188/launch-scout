@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { xmlValue } from './src/feed-parser.js';
 import { extractPreviewImage, safeWebUrl } from './src/launch-utils.js';
+import { buildPanelContext, normalizeAgentResults, parseAgentJsonResponse } from './src/agent-search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -19,6 +20,7 @@ const VERSION = '3.0.0';
 const SESSION_COOKIE = 'launchscout_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const MAX_BODY = 1024 * 1024;
+const MAX_SEARCH_RESULTS = 300;
 const MAX_PROVIDER_IMPORT = 100;
 const rateBuckets = new Map();
 const eventPreviewCache = new Map();
@@ -31,7 +33,7 @@ const createSecret = (prefix = '') => `${prefix}${crypto.randomBytes(32).toStrin
 const safeEqual = (left, right) => { const a = Buffer.from(String(left || '')); const b = Buffer.from(String(right || '')); return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b); };
 
 function defaultStore() {
-  return { version: 3, users: [], sessions: [], mcp: { ciphertext: '', iv: '', authTag: '', hash: '', createdAt: '', rotatedAt: '', revokedAt: '' }, launches: [], favorites: [], agents: [], providers: [], searchHistory: [], auditLog: [] };
+  return { version: 3, users: [], sessions: [], mcp: { ciphertext: '', iv: '', authTag: '', hash: '', createdAt: '', rotatedAt: '', revokedAt: '' }, agentSearch: { provider: 'exa', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini', context: '', apiKey: { ciphertext: '', iv: '', authTag: '' } }, launches: [], favorites: [], agents: [], providers: [], searchHistory: [], auditLog: [] };
 }
 function ensureStore() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); if (!fs.existsSync(DATA_FILE)) writeStore(defaultStore()); }
 function readStore() {
@@ -39,7 +41,7 @@ function readStore() {
   try {
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     const base = defaultStore();
-    return { ...base, ...parsed, mcp: { ...base.mcp, ...(parsed.mcp || {}) }, users: Array.isArray(parsed.users) ? parsed.users : [], sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [], launches: Array.isArray(parsed.launches) ? parsed.launches : [], favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [], agents: Array.isArray(parsed.agents) ? parsed.agents : [], providers: Array.isArray(parsed.providers) ? parsed.providers : [], searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : [], auditLog: Array.isArray(parsed.auditLog) ? parsed.auditLog : [] };
+    return { ...base, ...parsed, mcp: { ...base.mcp, ...(parsed.mcp || {}) }, agentSearch: { ...base.agentSearch, ...(parsed.agentSearch || {}), apiKey: { ...base.agentSearch.apiKey, ...(parsed.agentSearch?.apiKey || {}) } }, users: Array.isArray(parsed.users) ? parsed.users : [], sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [], launches: Array.isArray(parsed.launches) ? parsed.launches : [], favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [], agents: Array.isArray(parsed.agents) ? parsed.agents : [], providers: Array.isArray(parsed.providers) ? parsed.providers : [], searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : [], auditLog: Array.isArray(parsed.auditLog) ? parsed.auditLog : [] };
   } catch {
     const backup = `${DATA_FILE}.corrupt-${Date.now()}`;
     try { fs.renameSync(DATA_FILE, backup); } catch {}
@@ -155,12 +157,127 @@ async function fetchEventPreviewImage(value) {
 }
 function createProvider(input, publicUrl) { return { id: id(), name: text(input.name, 'Provedor RSS'), type: 'rss', url: publicUrl, category: text(input.category), language: text(input.language), enabled: input.enabled !== false, status: 'not_tested', createdAt: now(), lastSearchAt: '', lastError: '' }; }
 function providerImportError(error) { return ({ provider_url_invalid: 'URL inválida; use http ou https sem credenciais.', provider_private_address: 'A URL aponta para um endereço privado e não é permitida.', provider_port_not_allowed: 'A porta indicada não é permitida.' })[error.message] || 'A URL não pôde ser validada.'; }
+function publicAgentSearchConfig(config) { return { provider: config.provider, endpoint: config.endpoint, model: config.model, context: config.context, configured: Boolean(config.apiKey?.ciphertext) }; }
+async function requestAgentProvider(url, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
+    const raw = await readAgentResponse(response);
+    let payload;
+    try { payload = JSON.parse(raw); } catch { payload = null; }
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) throw new Error('agent_provider_auth_failed');
+      if (response.status === 429) throw new Error('agent_provider_rate_limited');
+      throw new Error('agent_provider_request_failed');
+    }
+    if (!payload || typeof payload !== 'object') throw new Error('agent_provider_response_invalid');
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function readAgentResponse(response) {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > 1_000_000) throw new Error('agent_provider_response_invalid');
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 1_000_000) {
+        await reader.cancel().catch(() => {});
+        throw new Error('agent_provider_response_invalid');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+async function searchWithAgent(store, input) {
+  const config = store.agentSearch;
+  if (!config.apiKey?.ciphertext) throw new Error('agent_provider_not_configured');
+  const question = text(input.question);
+  if (!question) throw new Error('agent_question_required');
+  const filters = Object.fromEntries(['tipo', 'fonte', 'produtor', 'período'].map((key) => [key, text(input.filters?.[key], '')]));
+  const context = buildPanelContext({
+    context: config.context,
+    filters,
+    providers: store.providers
+  });
+  const apiKey = decryptSecret(config.apiKey);
+
+  if (config.provider === 'exa') {
+    const query = [context, question].filter(Boolean).join('\n\n').slice(0, 4000);
+    const payload = await requestAgentProvider('https://api.exa.ai/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ query, type: 'auto', numResults: 10, contents: { text: { maxCharacters: 1500 } } })
+    });
+    const results = await validateAgentResults(normalizeAgentResults((payload.results || []).map((item) => ({
+      title: item.title,
+      url: item.url,
+      text: item.text,
+      author: item.author,
+      publishedDate: item.publishedDate,
+      image: item.image
+    }))));
+    return { answer: results.length ? `Encontrei ${results.length} resultados para: ${question}` : 'A pesquisa não encontrou resultados relevantes para esta pergunta.', results, provider: 'exa' };
+  }
+
+  if (config.provider !== 'openai-compatible') throw new Error('agent_provider_invalid');
+  let endpoint;
+  try {
+    endpoint = new URL(config.endpoint);
+    if (endpoint.protocol !== 'https:') throw new Error('https_required');
+    endpoint = new URL('chat/completions', `${(await assertPublicUrl(endpoint.toString())).replace(/\/?$/, '/')}`);
+  } catch {
+    throw new Error('agent_endpoint_invalid');
+  }
+  const payload = await requestAgentProvider(endpoint.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: config.model,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: `És o agente de pesquisa do LaunchScout. Responde em português. Usa o contexto e os filtros para encontrar oportunidades que realmente correspondam ao foco do painel. Não inventes fontes nem URLs; inclui apenas resultados com URL HTTP(S) verificável. Devolve apenas JSON no formato {"answer":"resposta concisa","results":[{"title":"...","url":"https://...","summary":"...","publisher":"...","publishedAt":"...","image":"https://..."}]}. Limita a 10 resultados e cada resumo a 200 caracteres.\nContexto do painel:\n${context || 'Radar de lançamentos independentes, eventos, workshops e produtos digitais.'}`
+        },
+        { role: 'user', content: question }
+      ]
+    })
+  });
+  const content = payload.choices?.[0]?.message?.content;
+  const parsed = parseAgentJsonResponse(content);
+  const results = await validateAgentResults(parsed.results);
+  return { ...parsed, results, provider: 'openai-compatible' };
+}
+async function validateAgentResults(items) {
+  const results = [];
+  for (const result of items) {
+    try {
+      await assertPublicUrl(result.url);
+      if (result.image) await assertPublicUrl(result.image);
+      results.push(result);
+    } catch {}
+  }
+  return results;
+}
 async function fetchProvider(provider) { const url = await assertPublicUrl(provider.url); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), Math.min(15000, Math.max(1000, Number(provider.timeoutMs || 10000)))); try { const response = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/plain;q=0.8' } }); if (!response.ok) throw new Error(`provider_http_${response.status}`); const body = await response.text(); if (body.length > 2_000_000) throw new Error('provider_response_too_large'); const blocks = [...body.matchAll(/<(?:item|entry)\b[\s\S]*?<\/(?:item|entry)>/gi)].map((match) => match[0]); return blocks.map((block, index) => { const title = xmlValue(block, 'title'); const linkMatch = block.match(/<link(?:\s+[^>]*)?>([\s\S]*?)<\/link>/i); const link = (linkMatch ? linkMatch[1] : '').replace(/<!\[CDATA\[|\]\]>/g, '').trim(); const date = xmlValue(block, 'pubDate') || xmlValue(block, 'published') || xmlValue(block, 'updated'); const summary = xmlValue(block, 'description') || xmlValue(block, 'summary') || xmlValue(block, 'content'); if (!title) return null; return normalizeLaunch({ title, summary, producer: provider.name, product_type: provider.category || 'Lançamento', event_date: date || '', registration_url: link || url, source: provider.name, category: provider.category || 'RSS', language: provider.language || '', verification: 'partial', discovered_at: now(), score: Math.max(1, 100 - index) }); }).filter(Boolean); } finally { clearTimeout(timeout); } }
-async function discoverExternal(store, args = {}) { const enabled = store.providers.filter((provider) => provider.enabled && provider.type === 'rss' && provider.url); const results = []; const sources = []; const failures = []; await Promise.all(enabled.map(async (provider) => { try { const items = await fetchProvider(provider); provider.status = 'online'; provider.lastSearchAt = now(); provider.lastError = ''; sources.push({ id: provider.id, name: provider.name, type: provider.type, status: 'online', count: items.length }); results.push(...items); } catch (e) { provider.status = 'error'; provider.lastSearchAt = now(); provider.lastError = e.message; failures.push({ id: provider.id, name: provider.name, error: e.message }); } })); const query = text(args.query || args.event_name).toLowerCase(); const filtered = results.filter((item) => !query || [item.title, item.summary, item.producer, item.category].join(' ').toLowerCase().includes(query)); const unique = [...new Map(filtered.map((item) => [`${item.title.toLowerCase()}|${item.registrationUrl}`, item])).values()]; for (const item of unique) { const existing = store.launches.find((entry) => entry.registrationUrl === item.registrationUrl && entry.title.toLowerCase() === item.title.toLowerCase()); if (existing) Object.assign(existing, { ...item, id: existing.id }); else store.launches.unshift(item); } store.searchHistory.unshift({ id: id(), query: args.query || args.event_name || '', at: now(), providers: sources.length, results: unique.length, failures: failures.length }); store.searchHistory = store.searchHistory.slice(0, 200); writeStore(store); return { items: unique.map((item) => publicLaunch(item, null, store)), sources, failures, provider_status: enabled.length ? (failures.length ? 'partial' : 'online') : 'not_configured' }; }
+async function discoverExternal(store, args = {}) { const enabled = store.providers.filter((provider) => provider.enabled && provider.type === 'rss' && provider.url); const results = []; const sources = []; const failures = []; await Promise.all(enabled.map(async (provider) => { try { const items = await fetchProvider(provider); provider.status = 'online'; provider.lastSearchAt = now(); provider.lastError = ''; sources.push({ id: provider.id, name: provider.name, type: provider.type, status: 'online', count: items.length }); results.push(...items); } catch (e) { provider.status = 'error'; provider.lastSearchAt = now(); provider.lastError = e.message; failures.push({ id: provider.id, name: provider.name, error: e.message }); } })); const query = text(args.query || args.event_name).toLowerCase(); const filtered = results.filter((item) => !query || [item.title, item.summary, item.producer, item.category].join(' ').toLowerCase().includes(query)); const unique = [...new Map(filtered.map((item) => [`${item.title.toLowerCase()}|${item.registrationUrl}`, item])).values()]; for (const item of unique) { const existing = store.launches.find((entry) => entry.registrationUrl === item.registrationUrl && entry.title.toLowerCase() === item.title.toLowerCase()); if (existing) Object.assign(existing, { ...item, id: existing.id }); else store.launches.unshift(item); } store.searchHistory.unshift({ id: id(), query: args.query || args.event_name || '', at: now(), providers: sources.length, results: unique.length, failures: failures.length }); store.searchHistory = store.searchHistory.slice(0, 200); writeStore(store); const requestedLimit = Number(args.limit); const limit = Number.isFinite(requestedLimit) ? Math.min(MAX_SEARCH_RESULTS, Math.max(1, requestedLimit)) : MAX_SEARCH_RESULTS; return { items: unique.slice(0, limit).map((item) => publicLaunch(item, null, store)), sources, failures, provider_status: enabled.length ? (failures.length ? 'partial' : 'online') : 'not_configured' }; }
 function normalizeLaunch(input, existingId = id()) { const safeUrl = (value) => { try { const u = new URL(String(value)); return ['http:', 'https:'].includes(u.protocol) ? u.toString() : ''; } catch { return ''; } }; return { id: existingId, title: text(input.title), summary: text(input.summary), producer: text(input.producer), productType: text(input.productType || input.product_type || input.type), eventDate: text(input.eventDate || input.event_date || input.date), registrationUrl: safeUrl(input.registrationUrl || input.registration_url || input.registration || input.url), imageUrl: safeUrl(input.imageUrl || input.image_url || input.image), source: text(input.source), category: text(input.category), country: text(input.country), language: text(input.language), score: Math.min(100, Math.max(0, Number(input.score || 0))), verification: ['confirmed', 'partial', 'unverified', 'expired'].includes(input.verification) ? input.verification : 'unverified', discoveredAt: text(input.discoveredAt || input.discovered_at || now()), updatedAt: now() }; }
 function publicLaunch(item, userId = null, store = null) { const saved = Boolean(userId && store?.favorites.some((fav) => fav.userId === userId && fav.launchId === item.id)); return { id: item.id, title: item.title, summary: item.summary, producer: item.producer, product_type: item.productType, date: item.eventDate, registration: item.registrationUrl, image: item.imageUrl, source: item.source, category: item.category, country: item.country, language: item.language, score: item.score, verification: item.verification, discoveredAt: item.discoveredAt, updatedAt: item.updatedAt, saved }; }
-function searchLaunches(store, args = {}, userId = null) { const q = text(args.query || args.event_name).toLowerCase(); const items = store.launches.filter((item) => { const hay = [item.title, item.summary, item.producer, item.productType, item.category, item.source, item.country, item.language].join(' ').toLowerCase(); if (q && !hay.includes(q)) return false; if (args.producer_name && !item.producer.toLowerCase().includes(text(args.producer_name).toLowerCase())) return false; for (const [key, field] of [['source', 'source'], ['product_type', 'productType'], ['category', 'category'], ['verification', 'verification']]) if (args[key] && !String(item[field]).toLowerCase().includes(text(args[key]).toLowerCase())) return false; if (args.date_from && item.eventDate < text(args.date_from)) return false; if (args.date_to && item.eventDate > `${text(args.date_to)}T23:59:59`) return false; return true; }); const sort = args.sort_by || 'score'; items.sort((a, b) => sort === 'date' ? String(a.eventDate).localeCompare(String(b.eventDate)) : sort === 'name' ? a.title.localeCompare(b.title) : Number(b.score) - Number(a.score)); const offset = Math.max(0, Number(args.offset || 0)); const limit = Math.min(100, Math.max(1, Number(args.limit || 50))); const page = items.slice(offset, offset + limit).map((item) => publicLaunch(item, userId, store)); return { items: page, count: page.length, total: items.length, next_offset: offset + page.length < items.length ? offset + page.length : null }; }
-function toolDefinitions() { const noArgs = { type: 'object', properties: {}, additionalProperties: false }; const searchSchema = { type: 'object', properties: { query: { type: 'string' }, event_name: { type: 'string' }, producer_name: { type: 'string' }, source: { type: 'string' }, product_type: { type: 'string' }, category: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, verification: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 }, offset: { type: 'integer', minimum: 0 }, sort_by: { type: 'string', enum: ['score', 'date', 'name'] } }, additionalProperties: false }; return [
+function searchLaunches(store, args = {}, userId = null) { const q = text(args.query || args.event_name).toLowerCase(); const items = store.launches.filter((item) => { const hay = [item.title, item.summary, item.producer, item.productType, item.category, item.source, item.country, item.language].join(' ').toLowerCase(); if (q && !hay.includes(q)) return false; if (args.producer_name && !item.producer.toLowerCase().includes(text(args.producer_name).toLowerCase())) return false; for (const [key, field] of [['source', 'source'], ['product_type', 'productType'], ['category', 'category'], ['verification', 'verification']]) if (args[key] && !String(item[field]).toLowerCase().includes(text(args[key]).toLowerCase())) return false; if (args.date_from && item.eventDate < text(args.date_from)) return false; if (args.date_to && item.eventDate > `${text(args.date_to)}T23:59:59`) return false; return true; }); const sort = args.sort_by || 'score'; items.sort((a, b) => sort === 'date' ? String(a.eventDate).localeCompare(String(b.eventDate)) : sort === 'name' ? a.title.localeCompare(b.title) : Number(b.score) - Number(a.score)); const offset = Math.max(0, Number(args.offset || 0)); const requestedLimit = Number(args.limit || 50); const limit = Number.isFinite(requestedLimit) ? Math.min(MAX_SEARCH_RESULTS, Math.max(1, requestedLimit)) : 50; const page = items.slice(offset, offset + limit).map((item) => publicLaunch(item, userId, store)); return { items: page, count: page.length, total: items.length, next_offset: offset + page.length < items.length ? offset + page.length : null }; }
+function toolDefinitions() { const noArgs = { type: 'object', properties: {}, additionalProperties: false }; const searchSchema = { type: 'object', properties: { query: { type: 'string' }, event_name: { type: 'string' }, producer_name: { type: 'string' }, source: { type: 'string' }, product_type: { type: 'string' }, category: { type: 'string' }, date_from: { type: 'string' }, date_to: { type: 'string' }, verification: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_RESULTS }, offset: { type: 'integer', minimum: 0 }, sort_by: { type: 'string', enum: ['score', 'date', 'name'] } }, additionalProperties: false }; return [
   { name: 'search_launches', description: 'Pesquisa lançamentos persistidos no catálogo com filtros e paginação.', inputSchema: searchSchema },
   { name: 'discover_launches', description: 'Executa a descoberta nos provedores externos habilitados; sem provedores configurados retorna estado explícito.', inputSchema: searchSchema },
   { name: 'search_web', description: 'Pesquisa web através dos provedores configurados pelo administrador.', inputSchema: searchSchema },
@@ -229,6 +346,78 @@ const server = http.createServer(async (req, res) => { res.setHeader('X-Frame-Op
         if (['provider_url_invalid', 'provider_private_address', 'provider_port_not_allowed'].includes(e.message)) return error(res, 400, 'event_preview_url_rejected', 'A URL da página ou da imagem não é permitida.');
         if (e.message === 'event_preview_too_large') return error(res, 413, 'event_preview_too_large', 'A página excede o limite de tamanho para pré-visualização.');
         return error(res, 502, 'event_preview_unavailable', 'Não foi possível carregar a pré-visualização desta página.');
+      }
+    }
+    if (pathname === '/api/agent-search/config' && req.method === 'GET') {
+      const auth = requireSession(req, res, store);
+      if (!auth) return;
+      const config = auth.user.role === 'admin'
+        ? publicAgentSearchConfig(store.agentSearch)
+        : { provider: store.agentSearch.provider, configured: Boolean(store.agentSearch.apiKey?.ciphertext) };
+      return json(res, 200, { ok: true, config });
+    }
+    if (pathname === '/api/agent-search/config' && req.method === 'PUT') {
+      const auth = requireSession(req, res, store, 'admin');
+      if (!auth) return;
+      const input = await readBody(req);
+      const provider = text(input.provider);
+      if (!['exa', 'openai-compatible'].includes(provider)) return error(res, 400, 'agent_provider_invalid', 'Selecione Exa ou uma API compatível com OpenAI.');
+      const apiKey = text(input.apiKey);
+      const sameProvider = provider === store.agentSearch.provider;
+      if (!apiKey && !input.clearApiKey && !sameProvider && store.agentSearch.apiKey?.ciphertext) return error(res, 400, 'agent_api_key_required', 'Informe a chave de API para o novo provedor ou remova a chave atual.');
+      let endpoint = store.agentSearch.endpoint;
+      let model = store.agentSearch.model;
+      if (provider === 'openai-compatible') {
+        try {
+          const parsed = new URL(text(input.endpoint));
+          if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('invalid_endpoint');
+          endpoint = await assertPublicUrl(parsed.toString());
+        } catch {
+          return error(res, 400, 'agent_endpoint_invalid', 'Informe um endpoint HTTPS público e compatível com OpenAI, por exemplo https://api.openai.com/v1.');
+        }
+        model = text(input.model);
+        if (!model) return error(res, 400, 'agent_model_required', 'Informe o identificador do modelo para a API compatível com OpenAI.');
+      }
+      let encryptedKey = store.agentSearch.apiKey;
+      if (input.clearApiKey) encryptedKey = { ciphertext: '', iv: '', authTag: '' };
+      if (apiKey) {
+        try { encryptedKey = encryptSecret(apiKey); } catch (e) {
+          if (e.message?.startsWith('MCP_MASTER_KEY')) return error(res, 503, 'agent_key_encryption_unavailable', 'Configure uma chave mestra válida para cifrar credenciais de API.');
+          throw e;
+        }
+      }
+      store.agentSearch = { provider, endpoint, model, context: text(input.context), apiKey: encryptedKey };
+      audit(store, 'agent_search_configured', auth.user.id, { provider, configured: Boolean(encryptedKey.ciphertext) });
+      writeStore(store);
+      return json(res, 200, { ok: true, config: publicAgentSearchConfig(store.agentSearch) });
+    }
+    if (pathname === '/api/agent-search' && req.method === 'POST') {
+      const auth = requireSession(req, res, store);
+      if (!auth) return;
+      if (!rateLimit(req, res, 'agent_search', 12, 60000)) return;
+      let input;
+      try { input = await readBody(req); } catch (e) {
+        return error(res, 400, e.message === 'body_too_large' ? 'agent_request_too_large' : 'invalid_json', 'Não foi possível ler a pergunta de pesquisa.');
+      }
+      try {
+        const result = await searchWithAgent(store, input || {});
+        audit(store, 'agent_search_completed', auth.user.id, { provider: result.provider, resultCount: result.results.length });
+        writeStore(store);
+        return json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        const errors = {
+          agent_provider_not_configured: [409, 'Configure uma chave de API em Configurações MCP para usar o modo agente.'],
+          agent_question_required: [400, 'Escreva uma pergunta para iniciar a pesquisa.'],
+          agent_provider_invalid: [400, 'O provedor de pesquisa configurado não é válido.'],
+          agent_endpoint_invalid: [400, 'O endpoint do provedor não é válido.'],
+          agent_provider_auth_failed: [502, 'A chave de API foi rejeitada pelo provedor.'],
+          agent_provider_rate_limited: [502, 'O provedor limitou as requisições. Tente novamente mais tarde.'],
+          agent_provider_response_invalid: [502, 'O provedor devolveu uma resposta inválida.'],
+          agent_response_invalid: [502, 'A resposta do agente não seguiu o formato estruturado esperado.'],
+          agent_provider_request_failed: [502, 'Não foi possível concluir a pesquisa no provedor de IA.']
+        };
+        const [status, message] = errors[e.message] || [502, 'O serviço de pesquisa com agente falhou.'];
+        return error(res, status, e.message, message);
       }
     }
     if (pathname === '/api/catalog' && req.method === 'GET') { const auth = requireSession(req, res, store); if (!auth) return; const result = searchLaunches(store, Object.fromEntries(new URL(req.url, `http://${req.headers.host}`).searchParams), auth.user.id); return json(res, 200, { ok: true, ...result }); }
