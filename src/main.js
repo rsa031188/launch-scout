@@ -1,4 +1,5 @@
 import './styles.css';
+import { collectAgentSearchResults } from './mcp-agents.js';
 
 const icon = (name, size = 18) => {
   const paths = {
@@ -368,69 +369,52 @@ function normalizeMcpItem(raw, index, connection) {
   const registration = raw.registration || raw.registration_url || raw.url || raw.link || raw.checkout_url || '#';
   const image = raw.image || raw.image_url || raw.cover_image || raw.cover || '';
   const tags = Array.isArray(raw.tags) ? raw.tags.slice(0, 3) : [raw.category || 'Descoberta'];
-  return { id: `mcp-${raw.id || raw.slug || `${Date.now()}-${index}`}`, title, producer, type, date, discoveredAt: new Date().toISOString(), source: raw.source || endpointHost, sourceType: 'MCP / LaunchRadar', registration, image, accent: ['#8FEA64', '#72a4ff', '#ffbe5c', '#d18bff'][index % 4], summary: raw.summary || raw.description || raw.excerpt || 'Sinal recebido de uma fonte MCP conectada.', tags, saved: false, status: 'new' };
+  return { id: `mcp-${connection.id || endpointHost}-${raw.id || raw.slug || `${Date.now()}-${index}`}`, title, producer, type, date, discoveredAt: new Date().toISOString(), source: raw.source || endpointHost, sourceType: 'MCP / LaunchRadar', registration, image, accent: ['#8FEA64', '#72a4ff', '#ffbe5c', '#d18bff'][index % 4], summary: raw.summary || raw.description || raw.excerpt || 'Sinal recebido de uma fonte MCP conectada.', tags, saved: false, status: 'new' };
 }
 
 async function runDiscovery() {
   const button = document.querySelector('[data-action="discover"]');
   if (button) { button.disabled = true; button.innerHTML = `${icon('radar', 16)} Escaneando...`; }
   toast('Escaneando fontes conectadas…');
+  let localItems = [];
+  let localSourceCount = 0;
+  let localError = '';
   if (state.auth) {
     try {
       const localResponse = await fetch('/api/search/discover', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ query: state.query || undefined, event_name: state.eventName || undefined, category: state.type !== 'Todos' ? state.type : undefined, limit: state.searchLimit }) });
       const localPayload = await parseJsonResponse(localResponse);
-      if (localResponse.ok) {
-        const localItems = (localPayload.items || []).map((item, index) => normalizeMcpItem(item, index, { endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean);
-        if (localItems.length) state.launches = [...localItems, ...state.launches.filter((old) => !localItems.some((item) => item.title === old.title && item.date === old.date))];
-        state.lastSync = 'agora mesmo';
-        localStorage.setItem('launchscout-last-sync', state.lastSync);
-        saveState();
-        renderApp();
-        const sourceCount = (localPayload.sources || []).length;
-        toast(localItems.length ? `${localItems.length} sinais recebidos de ${sourceCount} fonte(s) configurada(s).` : (localPayload.provider_status === 'not_configured' ? 'Nenhum provedor externo está configurado.' : 'Nenhum resultado verificável encontrado.'), localItems.length ? 'success' : 'default');
-        return;
-      }
+      if (!localResponse.ok) throw new Error(localPayload.error?.message || `HTTP ${localResponse.status}`);
+      localItems = (localPayload.items || []).map((item, index) => normalizeMcpItem(item, index, { id: 'local-rss', endpoint: INTERNAL_MCP_ENDPOINT })).filter(Boolean);
+      localSourceCount = (localPayload.sources || []).length;
     } catch (error) {
-      toast(`Pesquisa externa falhou: ${error.message}`);
+      localError = error.message;
     }
   }
   const connectedSources = activeConnections();
-  if (!connectedSources.length) {
+  if (!connectedSources.length && !localItems.length && !localSourceCount) {
     renderApp();
-    toast('Configure e ative pelo menos um agente MCP antes de pesquisar.');
+    toast(localError ? `Pesquisa local falhou: ${localError}. Configure e ative pelo menos um agente MCP.` : 'Configure e ative pelo menos um agente MCP antes de pesquisar.');
     return;
   }
   try {
     const argumentsForSearch = { query: state.query || undefined, event_name: state.eventName || undefined, product_type: state.type !== 'Todos' ? state.type : undefined, producer_name: state.producer !== 'Todos' ? state.producer : undefined, source: state.platform !== 'Todas' ? state.platform : undefined, date_window_days: state.period === 'Próximos 7 dias' ? 7 : state.period === 'Este mês' ? 31 : 90, limit: state.searchLimit, sort_by: state.sort === 'date' ? 'date' : 'score' };
-    const responses = await Promise.allSettled(connectedSources.map(async (connection) => ({ connection, result: await callMcp(connection, 'tools/call', { name: 'search_launches', arguments: argumentsForSearch }) })));
-    const remoteItems = [];
-    let failedAgents = 0;
-    responses.forEach((response) => {
-      if (response.status !== 'fulfilled') { failedAgents += 1; return; }
-      const { connection, result } = response.value;
-      let items = result?.structuredContent?.items;
-      if (!Array.isArray(items) && Array.isArray(result?.content)) {
-        try { items = JSON.parse(result.content.find((part) => part.type === 'text')?.text || '{}').items; } catch { items = []; }
-      }
-      (Array.isArray(items) ? items : []).forEach((item, index) => {
-        const normalized = normalizeMcpItem(item, index + remoteItems.length, connection);
-        if (normalized) remoteItems.push(normalized);
-      });
-    });
-    const uniqueItems = [...new Map(remoteItems.map((item) => [`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`, item])).values()];
+    const agentSearch = await collectAgentSearchResults(connectedSources, callMcp, argumentsForSearch, normalizeMcpItem);
+    const uniqueItems = [...new Map([...localItems, ...agentSearch.items].map((item) => [`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`, item])).values()];
     if (uniqueItems.length) {
-      const remoteIds = new Set(uniqueItems.map((item) => item.id));
-      state.launches = [...uniqueItems, ...state.launches.filter((item) => !remoteIds.has(item.id))];
+      const uniqueKeys = new Set(uniqueItems.map((item) => `${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`));
+      state.launches = [...uniqueItems, ...state.launches.filter((item) => !uniqueKeys.has(`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`))];
       state.lastSync = 'agora mesmo';
       localStorage.setItem('launchscout-last-sync', state.lastSync);
       saveState();
       renderApp();
-      toast(`${uniqueItems.length} sinais recebidos de ${connectedSources.length - failedAgents}/${connectedSources.length} agentes.`, 'success');
+      const agentSummary = connectedSources.length ? `${agentSearch.successfulCount}/${connectedSources.length} agentes` : 'nenhum agente MCP';
+      const localSummary = localSourceCount ? `, ${localSourceCount} fonte(s) RSS` : '';
+      toast(`${uniqueItems.length} sinais recebidos de ${agentSummary}${localSummary}.`, 'success');
     } else {
       state.lastSync = 'agora mesmo';
       localStorage.setItem('launchscout-last-sync', state.lastSync);
       renderApp();
-      toast(failedAgents ? `Nenhum agente respondeu. Falhas: ${failedAgents}. Verifique endpoint, token e CORS.` : 'MCP respondeu, mas não encontrou lançamentos para esta busca.');
+      toast(agentSearch.failedCount ? `Nenhum agente respondeu. Falhas: ${agentSearch.failedCount}. Verifique endpoint, token e CORS.${localError ? ` Pesquisa local: ${localError}.` : ''}` : localError ? `Pesquisa local falhou: ${localError}. MCP respondeu, mas não encontrou lançamentos.` : connectedSources.length ? 'MCP respondeu, mas não encontrou lançamentos para esta busca.' : 'Nenhum resultado verificável encontrado nas fontes RSS configuradas.');
     }
   } catch (error) {
     renderApp();

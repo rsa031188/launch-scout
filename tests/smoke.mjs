@@ -4,9 +4,32 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { xmlValue } from '../src/feed-parser.js';
+import { collectAgentSearchResults } from '../src/mcp-agents.js';
 
 assert.equal(xmlValue('<item><title lang="en">LaunchScout &amp; MCP</title></item>', 'title'), 'LaunchScout & MCP');
 assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></description></item>', 'description'), 'Local feed');
+
+const queriedAgents = [];
+const agentSearch = await collectAgentSearchResults(
+  [{ id: 'agent-one' }, { id: 'agent-two' }, { id: 'agent-offline' }, { id: 'agent-tool-error' }],
+  async (connection, method, params) => {
+    queriedAgents.push(connection.id);
+    assert.equal(method, 'tools/call');
+    assert.equal(params.name, 'search_launches');
+    if (connection.id === 'agent-offline') throw new Error('offline');
+    if (connection.id === 'agent-tool-error') return { isError: true };
+    if (connection.id === 'agent-two') {
+      return { content: [{ type: 'text', text: JSON.stringify({ items: [{ id: 'two', title: 'From agent two' }] }) }] };
+    }
+    return { structuredContent: { items: [{ id: 'one', title: 'From agent one' }] } };
+  },
+  { query: 'launch' },
+  (item, _index, connection) => ({ ...item, id: `${connection.id}:${item.id}` })
+);
+assert.deepEqual(queriedAgents.sort(), ['agent-offline', 'agent-one', 'agent-tool-error', 'agent-two']);
+assert.equal(agentSearch.successfulCount, 2);
+assert.equal(agentSearch.failedCount, 2);
+assert.deepEqual(agentSearch.items.map((item) => item.id).sort(), ['agent-one:one', 'agent-two:two']);
 
 const port = 3900 + Math.floor(Math.random() * 500);
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'launchscout-test-'));
