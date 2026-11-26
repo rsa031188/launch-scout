@@ -2,20 +2,37 @@
 
 LaunchScout é uma aplicação Node.js unificada: o radar, o endpoint MCP, a geração de tokens e o catálogo persistente vivem no mesmo servidor e no mesmo domínio. O catálogo preserva `source`, `discoveredAt` e `registration` em cada lançamento para manter a proveniência do sinal.
 
-## Executar no ambiente Node.js da Hostinger
+## Executar localmente
+
+Requisito: Node.js 20.19 ou superior. Instale as dependências e inicie a aplicação:
 
 ```bash
-npm install
-npm run dev
+npm ci
+npm start
 ```
 
-Na Hostinger, instale com `npm ci`, compile com `npm run build` e defina `server.js` como ficheiro de arranque da aplicação Node.js. O pacote também inclui `app.js` como ponto de entrada compatível com painéis que usam esse nome por padrão; `app.js` inicia o mesmo servidor. Alternativamente, use `npm start` ou `npm run start:production` se o painel aceitar comandos npm. Não use `vite preview` nem um servidor estático isolado: esses processos não expõem `/api/auth/generate` nem `/api/mcp`.
+Na primeira execução, `npm start` gera uma `MCP_MASTER_KEY` aleatória em `.env` e carrega o arquivo automaticamente; `npm run setup:local` também pode ser executado separadamente. Para iniciar em modo de desenvolvimento, use `npm run dev`. O `.env` é excluído do Git. Não apague nem regenere a chave enquanto quiser continuar usando os tokens MCP já emitidos: sem a chave original, o servidor não consegue descriptografar credenciais salvas.
+
+Se iniciar diretamente com Node, carregue o arquivo `.env` explicitamente:
+
+```bash
+npm run setup:local
+node --env-file-if-exists=.env server.js
+```
+
+Executar apenas `node server.js` não carrega `.env`; nesse caso, defina `MCP_MASTER_KEY` no ambiente do processo. Se a interface ainda indicar que a chave não está configurada, confirme que iniciou o servidor na pasta correta e que o processo carregou `.env` ou recebeu essa variável, depois reinicie-o. A chave deve representar 32 bytes (base64 ou 64 caracteres hexadecimais).
+
+## Executar no ambiente Node.js da Hostinger
+
+Na Hostinger, configure o projeto como **Outro / aplicação Node.js**, não como site estático Vite. Use `npm ci` para instalar, `npm run build` para compilar e gerar o entrypoint, e `npm run start:prod` para iniciar `dist/main.js`. Configure a raiz na pasta com `package.json` e defina `MCP_MASTER_KEY` nas variáveis de ambiente, mantendo-a estável entre reinícios. O build inclui os arquivos Vite e o entrypoint Node; o servidor Node entrega a interface e as APIs no mesmo domínio. `npm start` é conveniente para desenvolvimento local; `npm run start:production` compila e inicia em uma única etapa. Não publique apenas o conteúdo estático de `dist/`.
+
+Este projeto precisa que o processo Node permaneça ativo para atender `/api/*` e `/api/mcp`. `dist/` contém os arquivos Vite e `dist/main.js`, o entrypoint Node criado pelo build; não configure uma publicação estática que sirva somente os arquivos da pasta. Se o painel exigir um arquivo de entrada, use `dist/main.js`. O comando `npm run preview:static` é apenas para inspecionar o frontend localmente e não atende às APIs. Depois do arranque, `https://seu-dominio.com/health` deve responder JSON com `"runtime":"node"`. Se retornar 404 ou HTML, o domínio está servindo o deploy estático/outro site, ou não está associado ao processo Node correto.
 
 O build de produção é gerado com `npm run build` em `dist/`.
 
 ## Hospedagem Hostinger
 
-Na Hostinger, execute `npm ci`, `npm run build` e depois `node server.js` através da aplicação Node.js do painel. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `LAUNCHSCOUT_DATA_DIR`, que deve apontar para armazenamento persistente e ser incluído no backup.
+Na Hostinger, execute `npm ci` e `npm run build`; configure o início como `npm run start:prod` ou use `dist/main.js` como entrypoint. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `LAUNCHSCOUT_DATA_DIR`, que deve apontar para armazenamento persistente e ser incluído no backup.
 
 Requisito: Node.js 20.19 ou superior.
 
@@ -30,7 +47,7 @@ CORS_ORIGIN=https://seu-dominio.com
 
 Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta Node configurada.
 
-Para confirmar que o domínio está ligado ao processo Node correto, abra `https://seu-dominio.com/health`. A resposta esperada é JSON contendo `"runtime":"node"`. Se aparecer uma página 404/HTML, o domínio ainda está a apontar para alojamento estático ou para outra aplicação; no painel Node.js, use `server.js` como ficheiro de arranque, reinicie a aplicação e aponte o domínio para essa aplicação.
+Para confirmar que o domínio está ligado ao processo Node correto, abra `https://seu-dominio.com/health`. A resposta esperada é JSON contendo `"runtime":"node"`. Se aparecer uma página 404/HTML, o domínio ainda está a apontar para alojamento estático ou para outra aplicação; no painel, confirme que iniciou `dist/main.js`/`npm run start:prod` e aponte o domínio para a aplicação Node.
 
 ## Autenticação e MCP
 

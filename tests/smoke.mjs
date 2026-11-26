@@ -3,6 +3,10 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { xmlValue } from '../src/feed-parser.js';
+
+assert.equal(xmlValue('<item><title lang="en">LaunchScout &amp; MCP</title></item>', 'title'), 'LaunchScout & MCP');
+assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></description></item>', 'description'), 'Local feed');
 
 const port = 3900 + Math.floor(Math.random() * 500);
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'launchscout-test-'));
@@ -19,15 +23,26 @@ try {
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'LaunchScout', password: 'Launch_admin' }) });
   assert.equal(login.response.status, 200);
   assert.ok(login.body.csrfToken);
+  const restoredSession = await request('/api/auth/me');
+  assert.equal(restoredSession.response.status, 200);
+  assert.equal(restoredSession.body.authenticated, true);
+  assert.equal(restoredSession.body.csrfToken, login.body.csrfToken);
   const account = await request('/api/account');
   assert.equal(account.body.account.email, 'LaunchScout');
-  const generated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': login.body.csrfToken } });
+  const generated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': restoredSession.body.csrfToken } });
   assert.equal(generated.response.status, 200);
   assert.match(generated.body.token, /^lr_[a-f0-9]{64}$/);
   const firstToken = generated.body.token;
   const initialized = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
   assert.equal(initialized.response.status, 200);
   assert.equal(initialized.body.result.serverInfo.name, 'LaunchScout Unified MCP');
+  const listedTools = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) });
+  assert.equal(listedTools.response.status, 200);
+  assert.ok(listedTools.body.result.tools.some((tool) => tool.name === 'search_launches'));
+  const searched = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'search_launches', arguments: { query: 'not-in-empty-catalog' } } }) });
+  assert.equal(searched.response.status, 200);
+  assert.equal(searched.body.result.isError, false);
+  assert.equal(searched.body.result.structuredContent.total, 0);
   const rotated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': login.body.csrfToken } });
   assert.equal(rotated.response.status, 200);
   assert.notEqual(rotated.body.token, firstToken);
