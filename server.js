@@ -58,10 +58,33 @@ function clearCookie(res, name) { setCookie(res, name, '', { maxAge: 0 }); }
 function csrfFrom(req) { return text(req.headers['x-csrf-token']); }
 function getMasterKey() {
   const raw = process.env.MCP_MASTER_KEY || '';
-  if (!raw) throw new Error('MCP_MASTER_KEY não configurada. Gere uma chave de 32 bytes para habilitar tokens MCP.');
-  const decoded = /^[a-f0-9]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
-  if (decoded.length !== 32) throw new Error('MCP_MASTER_KEY deve representar exatamente 32 bytes em hexadecimal ou base64.');
-  return decoded;
+  if (raw) {
+    const decoded = /^[a-f0-9]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
+    if (decoded.length !== 32) throw new Error('MCP_MASTER_KEY deve representar exatamente 32 bytes em hexadecimal ou base64.');
+    return decoded;
+  }
+
+  const keyPath = path.join(DATA_DIR, 'mcp-master.key');
+  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  try {
+    const stored = fs.readFileSync(keyPath);
+    if (stored.length !== 32) throw new Error('O arquivo de chave MCP deve conter exatamente 32 bytes.');
+    return stored;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  const generated = crypto.randomBytes(32);
+  try {
+    fs.writeFileSync(keyPath, generated, { flag: 'wx', mode: 0o600 });
+    console.warn('MCP_MASTER_KEY ausente; chave aleatória persistida em LAUNCHSCOUT_DATA_DIR. Mantenha esse armazenamento persistente.');
+    return generated;
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const stored = fs.readFileSync(keyPath);
+    if (stored.length !== 32) throw new Error('O arquivo de chave MCP deve conter exatamente 32 bytes.');
+    return stored;
+  }
 }
 function encryptSecret(secret) { const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', getMasterKey(), iv); const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]); return { ciphertext: ciphertext.toString('base64'), iv: iv.toString('base64'), authTag: cipher.getAuthTag().toString('base64') }; }
 function decryptSecret(mcp) { if (!mcp?.ciphertext) return ''; const decipher = crypto.createDecipheriv('aes-256-gcm', getMasterKey(), Buffer.from(mcp.iv, 'base64')); decipher.setAuthTag(Buffer.from(mcp.authTag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(mcp.ciphertext, 'base64')), decipher.final()]).toString('utf8'); }

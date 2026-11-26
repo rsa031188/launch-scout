@@ -88,6 +88,22 @@ const saveState = () => {
   writeSessionTokens(state.config.connections);
 };
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const field = document.createElement('textarea');
+  field.value = value;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand('copy');
+  field.remove();
+  if (!copied) throw new Error('clipboard_unavailable');
+}
 const formatDate = (value, compact = false) => { if (!value || Number.isNaN(new Date(value).getTime())) return 'Data desconhecida'; return new Intl.DateTimeFormat('pt-PT', compact ? { day: '2-digit', month: 'short' } : { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)).replace('.', ''); };
 const daysUntil = (value) => { if (!value || Number.isNaN(new Date(value).getTime())) return null; return Math.ceil((new Date(value).getTime() - Date.now()) / 86400000); };
 const relativeDate = (value) => {
@@ -214,9 +230,9 @@ function renderSettingsModal() {
   const currentToken = editing?.token || (editing?.id === 'primary' ? state.pendingToken : '') || '';
   const currentConnected = editing?.connected !== false;
   const isCore = editing?.id === 'primary';
-  const tokenControls = isCore ? `<div class="token-actions"><button type="button" class="ghost-button token-button" data-action="generate-token" ${state.tokenGenerating ? 'disabled' : ''}>${icon('spark', 14)} ${state.tokenGenerating ? 'Gerando token...' : currentToken ? 'Gerar novo token e substituir' : 'Gerar token interno'}</button>${currentToken ? `<button type="button" class="ghost-button token-button" data-action="copy-stored-token">Copiar token para o agente</button>` : ''}<button type="button" class="danger-button token-button" data-action="revoke-token">Revogar token interno</button></div>` : '<div class="settings-note external-token-note">Credencial exclusiva deste agente externo. Ela não altera o LaunchScout Core.</div>';
+  const tokenControls = isCore ? `<div class="token-actions"><button type="button" class="ghost-button token-button" data-action="generate-token" ${state.tokenGenerating ? 'disabled' : ''}>${icon('spark', 14)} ${state.tokenGenerating ? 'Gerando token...' : currentToken ? 'Gerar novo token e substituir' : 'Gerar token interno'}</button>${currentToken ? `<button type="button" class="ghost-button token-button" data-action="copy-stored-token">Copiar token MCP para o agente</button>` : ''}<button type="button" class="danger-button token-button" data-action="revoke-token">Revogar token interno</button></div>` : '<div class="settings-note external-token-note">Credencial exclusiva deste agente externo. Ela não altera o LaunchScout Core.</div>';
   const adminRecovery = isCore ? '<div class="settings-note open-token-note">A emissão do token é aberta: gerar um novo token substitui imediatamente o token anterior. Use esta operação somente quando quiser fazer a rotação da credencial.</div>' : '';
-  const tokenNotice = isCore && state.tokenNotice ? `<div class="token-reveal"><strong>Novo token gerado — copie para o agente</strong><code>${esc(state.tokenNotice)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token</button><small>O navegador mantém este token até você gerar outro ou revogá-lo.</small></div>` : '';
+  const tokenNotice = isCore && state.tokenNotice ? `<div class="token-reveal"><strong>Novo token MCP — copie para o agente</strong><code>${esc(state.tokenNotice)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token MCP</button><small>Não compartilhe a MCP_MASTER_KEY; o agente recebe apenas este token. O navegador mantém o token até você gerar outro ou revogá-lo.</small></div>` : '';
   return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="account-panel"><div class="list-heading"><span>Configurações da conta</span><span class="label-note">Sessão autenticada</span></div><div class="account-summary"><strong>${esc(state.auth.name || state.auth.email)}</strong><small>${esc(state.auth.email)} · ${esc(state.auth.role)}</small></div><form class="password-form" data-form="password"><label>Password atual<input name="currentPassword" type="password" autocomplete="current-password" required /></label><label>Nova password<input name="newPassword" type="password" autocomplete="new-password" minlength="12" required /><small>Use pelo menos 12 caracteres.</small></label><label>Confirmar nova password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="ghost-button" type="submit">Alterar password</button></form></div><div class="provider-panel"><div class="list-heading"><span>Pesquisa externa</span><span class="label-note">RSS público, validado contra SSRF</span></div><form class="provider-form" data-form="provider"><input name="name" placeholder="Nome da fonte" required /><input name="url" type="url" placeholder="https://exemplo.org/feed.xml" required /><button class="ghost-button" type="submit">Adicionar fonte</button></form><small class="provider-help">Sem provedor configurado, o radar não inventa resultados.</small></div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div><form class="settings-form" data-form="settings"><label>Nome do agente<input name="agentName" value="${esc(currentName)}" placeholder="Agente de descoberta" required /></label><label>Função do agente<input name="role" value="${esc(currentRole)}" placeholder="Catálogo, eventos, produtos..." required /></label><label>Endpoint MCP<input name="endpoint" value="${esc(currentEndpoint)}" placeholder="/api/mcp" required /></label><label>Token de acesso <span class="label-note">hash salvo no servidor; exibido apenas uma vez</span><input name="token" type="password" value="${esc(currentToken)}" placeholder="${isCore ? 'Gere um token abaixo' : 'Token do agente externo'}" autocomplete="off" />${tokenControls}</label>${adminRecovery}${tokenNotice}<div class="settings-note">${icon('link', 15)} <span>A busca chama <strong>todos os agentes habilitados em paralelo</strong>. O token interno é gerado por este Node e o endpoint padrão é <strong>/api/mcp</strong>.</span></div><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-settings">Cancelar</button><button type="submit" class="primary-button">${icon('check', 15)} ${editing ? 'Salvar alterações' : 'Criar agente'}</button></div></form></section></div>`;
 }
 
@@ -440,7 +456,7 @@ app.addEventListener('click', (event) => {
       const tokenInput = document.querySelector('[data-form="settings"] input[name="token"]');
       if (tokenInput) { tokenInput.value = payload.token; tokenInput.type = 'text'; }
       const formElement = document.querySelector('[data-form="settings"]');
-      if (formElement && !formElement.querySelector('.token-reveal')) { const notice = document.createElement('div'); notice.className = 'token-reveal'; notice.innerHTML = `<strong>Token gerado — copie agora</strong><code>${esc(payload.token)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token</button><small>Ele não será exibido novamente pelo servidor.</small>`; formElement.insertBefore(notice, formElement.querySelector('.settings-note')); }
+      if (formElement && !formElement.querySelector('.token-reveal')) { const notice = document.createElement('div'); notice.className = 'token-reveal'; notice.innerHTML = `<strong>Novo token MCP — copie para o agente</strong><code>${esc(payload.token)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token MCP</button><small>Não compartilhe a MCP_MASTER_KEY; o agente recebe apenas este token.</small>`; formElement.insertBefore(notice, formElement.querySelector('.settings-note')); }
       toast('Token gerado. Copie e guarde-o agora.', 'success');
     }).catch((error) => { state.tokenGenerating = false; button.disabled = false; button.textContent = connection?.token ? 'Gerar novo token e substituir' : 'Gerar token interno'; toast(`Geração de token falhou: ${error.message}`); });
     return;
@@ -450,14 +466,14 @@ app.addEventListener('click', (event) => {
     const connection = state.config.connections.find((item) => item.id === 'primary');
     const token = state.tokenNotice || state.pendingToken || form?.elements?.token?.value || connection?.token || '';
     if (!token) { toast('Nenhum token novo disponível para copiar.'); return; }
-    navigator.clipboard?.writeText(token).then(() => toast('Token copiado para a área de transferência.', 'success')).catch(() => toast('Não foi possível copiar automaticamente; selecione o token exibido.'));
+    copyText(token).then(() => toast('Token MCP copiado para colar no agente de IA.', 'success')).catch(() => toast('Não foi possível copiar automaticamente; selecione o token exibido.'));
     return;
   }
   if (action === 'copy-stored-token') {
     const connection = state.config.connections.find((item) => item.id === 'primary');
     const token = document.querySelector('[data-form="settings"] input[name="token"]')?.value || connection?.token || '';
     if (!token) { toast('Nenhum token interno armazenado. Gere um token primeiro.'); return; }
-    navigator.clipboard?.writeText(token).then(() => toast('Token copiado para colar no agente MCP.', 'success')).catch(() => toast('Não foi possível copiar automaticamente; selecione o token no campo.'));
+    copyText(token).then(() => toast('Token MCP copiado para colar no agente de IA.', 'success')).catch(() => toast('Não foi possível copiar automaticamente; selecione o token no campo.'));
     return;
   }
   if (action === 'revoke-token') {

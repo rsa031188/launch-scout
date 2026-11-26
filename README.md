@@ -11,7 +11,7 @@ npm ci
 npm start
 ```
 
-Na primeira execução, `npm start` gera uma `MCP_MASTER_KEY` aleatória em `.env` e carrega o arquivo automaticamente; `npm run setup:local` também pode ser executado separadamente. Para iniciar em modo de desenvolvimento, use `npm run dev`. O `.env` é excluído do Git. Não apague nem regenere a chave enquanto quiser continuar usando os tokens MCP já emitidos: sem a chave original, o servidor não consegue descriptografar credenciais salvas.
+Na primeira execução, `npm start` gera uma `MCP_MASTER_KEY` aleatória em `.env` e carrega o arquivo automaticamente; `npm run setup:local` também pode ser executado separadamente. Para iniciar em modo de desenvolvimento, use `npm run dev`. Se o servidor iniciar sem a variável, ele gera uma chave binária de 32 bytes em `LAUNCHSCOUT_DATA_DIR/mcp-master.key`. O `.env` e o diretório `data/` são excluídos do Git. Preserve a chave e o diretório de dados: sem eles, o servidor não consegue descriptografar credenciais salvas.
 
 Se iniciar diretamente com Node, carregue o arquivo `.env` explicitamente:
 
@@ -24,7 +24,7 @@ Executar apenas `node server.js` não carrega `.env`; nesse caso, defina `MCP_MA
 
 ## Executar no ambiente Node.js da Hostinger
 
-Na Hostinger, configure o projeto como **Outro / aplicação Node.js**, não como site estático Vite. Use `npm ci` para instalar, `npm run build` para compilar e gerar o entrypoint, e `npm run start:prod` para iniciar `dist/main.js`. Configure a raiz na pasta com `package.json` e defina `MCP_MASTER_KEY` nas variáveis de ambiente, mantendo-a estável entre reinícios. O build inclui os arquivos Vite e o entrypoint Node; o servidor Node entrega a interface e as APIs no mesmo domínio. `npm start` é conveniente para desenvolvimento local; `npm run start:production` compila e inicia em uma única etapa. Não publique apenas o conteúdo estático de `dist/`.
+Na Hostinger, configure o projeto como **Outro / aplicação Node.js**, não como site estático Vite. Use `npm ci` para instalar, `npm run build` para compilar e gerar o entrypoint, e `npm run start:prod` para iniciar `dist/main.js`. Configure a raiz na pasta com `package.json` e aponte `LAUNCHSCOUT_DATA_DIR` para armazenamento persistente. `MCP_MASTER_KEY` pode ser fornecida como variável de ambiente; se estiver ausente, o servidor gera uma chave segura dentro do diretório de dados. O build inclui os arquivos Vite e o entrypoint Node; o servidor Node entrega a interface e as APIs no mesmo domínio. `npm start` é conveniente para desenvolvimento local; `npm run start:production` compila e inicia em uma única etapa. Não publique apenas o conteúdo estático de `dist/`.
 
 Este projeto precisa que o processo Node permaneça ativo para atender `/api/*` e `/api/mcp`. `dist/` contém os arquivos Vite e `dist/main.js`, o entrypoint Node criado pelo build; não configure uma publicação estática que sirva somente os arquivos da pasta. Se o painel exigir um arquivo de entrada, use `dist/main.js`. O comando `npm run preview:static` é apenas para inspecionar o frontend localmente e não atende às APIs. Depois do arranque, `https://seu-dominio.com/health` deve responder JSON com `"runtime":"node"`. Se retornar 404 ou HTML, o domínio está servindo o deploy estático/outro site, ou não está associado ao processo Node correto.
 
@@ -70,7 +70,7 @@ O endpoint de geração autenticada é:
 POST /api/auth/generate
 ```
 
-O servidor retorna o token em texto puro somente nessa resposta. O arquivo `data/launchscout.json` não contém o token em texto puro: guarda a cifra AES-256-GCM e o hash SHA-256. Publique a aplicação apenas em HTTPS e mantenha `MCP_MASTER_KEY` fora do repositório.
+O servidor retorna o token de acesso MCP em texto puro somente na geração; use o botão **Copiar token MCP** para colá-lo no agente de IA. Não compartilhe `MCP_MASTER_KEY`: ela é somente para cifrar credenciais no servidor. O arquivo `data/launchscout.json` guarda a cifra AES-256-GCM e o hash SHA-256, nunca o token em texto puro. Publique a aplicação apenas em HTTPS e mantenha a chave mestra fora do repositório.
 
 Se precisar de uma credencial estável definida pelo ambiente, configure `MCP_FIXED_TOKEN` com pelo menos 32 caracteres. Nesse modo, o mesmo token é aceite após reinícios e a rotação/revogação pela interface fica bloqueada; para o trocar, altere a variável e reinicie o servidor. Mantenha `MCP_FIXED_TOKEN` fora do repositório.
 
