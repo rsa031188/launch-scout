@@ -38,6 +38,8 @@ const state = {
   view: 'catalog',
   settingsOpen: false,
   editingConnectionId: 'primary',
+  providers: [],
+  editingProviderId: '',
   pendingToken: '',
   tokenGenerating: false,
   tokenNotice: '',
@@ -236,6 +238,33 @@ function renderSettingsModal() {
   return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="account-panel"><div class="list-heading"><span>Configurações da conta</span><span class="label-note">Sessão autenticada</span></div><div class="account-summary"><strong>${esc(state.auth.name || state.auth.email)}</strong><small>${esc(state.auth.email)} · ${esc(state.auth.role)}</small></div><form class="password-form" data-form="password"><label>Password atual<input name="currentPassword" type="password" autocomplete="current-password" required /></label><label>Nova password<input name="newPassword" type="password" autocomplete="new-password" minlength="12" required /><small>Use pelo menos 12 caracteres.</small></label><label>Confirmar nova password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="ghost-button" type="submit">Alterar password</button></form></div><div class="provider-panel"><div class="list-heading"><span>Pesquisa externa</span><span class="label-note">RSS público, validado contra SSRF</span></div><form class="provider-form" data-form="provider"><input name="name" placeholder="Nome da fonte" required /><input name="url" type="url" placeholder="https://exemplo.org/feed.xml" required /><button class="ghost-button" type="submit">Adicionar fonte</button></form><small class="provider-help">Sem provedor configurado, o radar não inventa resultados.</small></div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div><form class="settings-form" data-form="settings"><label>Nome do agente<input name="agentName" value="${esc(currentName)}" placeholder="Agente de descoberta" required /></label><label>Função do agente<input name="role" value="${esc(currentRole)}" placeholder="Catálogo, eventos, produtos..." required /></label><label>Endpoint MCP<input name="endpoint" value="${esc(currentEndpoint)}" placeholder="/api/mcp" required /></label><label>Token de acesso <span class="label-note">hash salvo no servidor; exibido apenas uma vez</span><input name="token" type="password" value="${esc(currentToken)}" placeholder="${isCore ? 'Gere um token abaixo' : 'Token do agente externo'}" autocomplete="off" />${tokenControls}</label>${adminRecovery}${tokenNotice}<div class="settings-note">${icon('link', 15)} <span>A busca chama <strong>todos os agentes habilitados em paralelo</strong>. O token interno é gerado por este Node e o endpoint padrão é <strong>/api/mcp</strong>.</span></div><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-settings">Cancelar</button><button type="submit" class="primary-button">${icon('check', 15)} ${editing ? 'Salvar alterações' : 'Criar agente'}</button></div></form></section></div>`;
 }
 
+function renderProviderManagement() {
+  const panel = app.querySelector('.provider-panel');
+  if (!panel) return;
+  if (state.auth?.role !== 'admin') {
+    panel.remove();
+    return;
+  }
+
+  panel.querySelector('.provider-management')?.remove();
+  const section = document.createElement('div');
+  section.className = 'provider-management';
+  const providers = state.providers.map((provider) => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.url)}</small><small>${provider.enabled ? 'Ativo' : 'Desativado'} · ${esc(provider.status || 'não testado')}</small></div><button type="button" class="text-button" data-action="edit-provider" data-id="${esc(provider.id)}">Editar</button></div>`).join('');
+  section.innerHTML = `<div class="list-heading"><span>Provedores configurados <b>${state.providers.length}</b></span></div>${providers}`;
+
+  const provider = state.providers.find((item) => item.id === state.editingProviderId);
+  if (provider) {
+    const form = document.createElement('form');
+    form.className = 'provider-edit-form';
+    form.dataset.form = 'provider-edit';
+    form.innerHTML = `<input type="hidden" name="id" value="${esc(provider.id)}" /><label>Nome do provedor<input name="name" value="${esc(provider.name)}" required /></label><label>URL do feed RSS<input name="url" type="url" value="${esc(provider.url)}" required /></label><label class="provider-enabled"><input name="enabled" type="checkbox" ${provider.enabled ? 'checked' : ''} /> Provedor ativo</label><div class="modal-actions"><button type="button" class="ghost-button" data-action="cancel-provider-edit">Cancelar</button><button type="submit" class="primary-button">Salvar provedor</button></div>`;
+    section.append(form);
+  }
+  panel.append(section);
+  const emptyHint = panel.querySelector('.provider-help');
+  if (emptyHint && state.providers.length) emptyHint.remove();
+}
+
 function renderAuth() {
   const registering = state.authMode === 'register';
   return `<main class="auth-screen"><section class="auth-panel"><div class="brand-lockup"><div class="brand-mark">${icon('radar', 24)}</div><div><div class="brand-name">LaunchScout</div><div class="brand-kicker">personal launch radar</div></div></div><div class="eyebrow lime">${registering ? 'NOVA CONTA' : 'ACESSO PROTEGIDO'}</div><h1>${registering ? 'Crie o seu radar.' : 'Entre no seu radar.'}</h1><p>${registering ? 'Crie a sua conta para começar a guardar sinais e configurar as suas fontes.' : 'A área de administração e as credenciais MCP ficam disponíveis apenas após autenticação.'}</p><div class="auth-tabs" role="tablist"><button type="button" class="auth-tab ${!registering ? 'active' : ''}" data-action="auth-login">Iniciar sessão</button><button type="button" class="auth-tab ${registering ? 'active' : ''}" data-action="auth-register">Criar conta</button></div><form class="auth-form" data-form="${registering ? 'register' : 'login'}">${registering ? '<label>Nome<input name="name" type="text" autocomplete="name" required placeholder="O seu nome" /></label>' : ''}<label>${registering ? 'E-mail' : 'E-mail ou utilizador'}<input name="email" type="text" autocomplete="username" required placeholder="${registering ? 'nome@exemplo.com' : 'admin'}" /></label><label>Password<input name="password" type="password" autocomplete="${registering ? 'new-password' : 'current-password'}" minlength="${registering ? '12' : '1'}" required placeholder="A sua password" /></label>${registering ? '<label>Confirmar password<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="12" required placeholder="Repita a password" /></label>' : ''}${state.authError ? `<div class="auth-error">${esc(state.authError)}</div>` : ''}<button class="primary-button" type="submit">${icon('arrow', 15)} ${registering ? 'Criar conta e entrar' : 'Iniciar sessão'}</button></form><small class="auth-footnote">${registering ? 'A password deve ter pelo menos 12 caracteres.' : 'Pode criar uma nova conta no separador acima. A conta admin inicial é temporária e deve alterar a password.'}</small></section></main>`;
@@ -245,13 +274,16 @@ function renderApp() {
   if (!state.auth) { app.innerHTML = renderAuth(); return; }
   if (state.view === 'saved') {
     app.innerHTML = `<div class="app-shell">${renderSidebar()}<main class="main-content">${renderSavedView()}</main>${renderSettingsModal()}<div class="toast-region" aria-live="polite"></div></div>`;
+    renderProviderManagement();
     return;
   }
   if (state.view === 'dashboard') {
     app.innerHTML = `<div class="app-shell">${renderSidebar()}<main class="main-content">${renderDashboard()}</main>${renderSettingsModal()}<div class="toast-region" aria-live="polite"></div></div>`;
+    renderProviderManagement();
     return;
   }
   app.innerHTML = `<div class="app-shell">${renderSidebar()}<main class="main-content">${renderTopbar('Radar de lançamentos', 'DESCOBERTA CONTÍNUA')}${renderStats()}${renderCatalog()}</main>${renderSettingsModal()}<div class="toast-region" aria-live="polite"></div></div>`;
+  renderProviderManagement();
 }
 
 function toast(message, tone = 'default') {
@@ -268,6 +300,19 @@ function toast(message, tone = 'default') {
 async function parseJsonResponse(response) {
   const raw = await response.text();
   try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error(`A aplicação Node da Hostinger não devolveu JSON válido (HTTP ${response.status}). Confirme que o arranque usa server.js ou npm run start:production, e não apenas vite preview.`); }
+}
+
+async function loadExternalProviders() {
+  if (state.auth?.role !== 'admin') return;
+  try {
+    const response = await fetch('/api/admin/providers', { headers: { Accept: 'application/json' } });
+    const payload = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível carregar os provedores.');
+    state.providers = payload.providers || [];
+    if (state.settingsOpen) renderApp();
+  } catch (error) {
+    toast(`Não foi possível carregar provedores externos: ${error.message}`);
+  }
 }
 
 async function hydrateCatalog() {
@@ -410,8 +455,10 @@ app.addEventListener('click', (event) => {
   if (action === 'auth-login') { state.authMode = 'login'; state.authError = ''; renderApp(); return; }
   if (action === 'auth-register') { state.authMode = 'register'; state.authError = ''; renderApp(); return; }
   if (action === 'logout') { fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).finally(() => { state.auth = null; state.csrfToken = ''; state.settingsOpen = false; renderApp(); }); return; }
-  if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; renderApp(); return; }
+  if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; state.editingProviderId = ''; renderApp(); loadExternalProviders(); return; }
   if (action === 'close-settings') { state.settingsOpen = false; renderApp(); return; }
+  if (action === 'edit-provider') { state.editingProviderId = actionTarget.dataset.id; renderApp(); return; }
+  if (action === 'cancel-provider-edit') { state.editingProviderId = ''; renderApp(); return; }
   if (action === 'new-connection') { state.editingConnectionId = 'new'; renderApp(); return; }
   if (action === 'edit-connection') { state.editingConnectionId = actionTarget.dataset.id; renderApp(); return; }
   if (action === 'remove-connection') {
@@ -529,7 +576,26 @@ app.addEventListener('submit', (event) => {
   if (event.target.matches('[data-form="provider"]')) {
     event.preventDefault();
     const form = new FormData(event.target);
-    fetch('/api/admin/providers', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ name: form.get('name'), url: form.get('url'), type: 'rss', enabled: true }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível adicionar a fonte.'); return payload; }).then(() => { event.target.reset(); toast('Fonte RSS adicionada. Execute uma nova busca para consultar dados reais.', 'success'); }).catch((error) => toast(`Fonte não adicionada: ${error.message}`));
+    fetch('/api/admin/providers', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ name: form.get('name'), url: form.get('url'), type: 'rss', enabled: true }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível adicionar a fonte.'); return payload; }).then(async () => { event.target.reset(); await loadExternalProviders(); toast('Fonte RSS adicionada. Execute uma nova busca para consultar dados reais.', 'success'); }).catch((error) => toast(`Fonte não adicionada: ${error.message}`));
+    return;
+  }
+  if (event.target.matches('[data-form="provider-edit"]')) {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const providerId = String(form.get('id'));
+    fetch(`/api/admin/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
+      body: JSON.stringify({ name: form.get('name'), url: form.get('url'), enabled: form.get('enabled') === 'on' })
+    }).then(async (response) => {
+      const payload = await parseJsonResponse(response);
+      if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível atualizar o provedor.');
+      return payload;
+    }).then(async () => {
+      state.editingProviderId = '';
+      await loadExternalProviders();
+      toast('Provedor externo atualizado.', 'success');
+    }).catch((error) => toast(`Edição do provedor falhou: ${error.message}`));
     return;
   }
   if (!event.target.matches('[data-form="settings"]')) return;

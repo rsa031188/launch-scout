@@ -10,6 +10,7 @@ assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></
 
 const port = 3900 + Math.floor(Math.random() * 500);
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'launchscout-test-'));
+await fs.writeFile(path.join(dataDir, 'launchscout.json'), JSON.stringify({ providers: [{ id: 'provider-test', name: 'Feed inicial', type: 'rss', url: 'https://example.com/feed.xml', enabled: true, status: 'not_tested' }] }));
 const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1', LAUNCHSCOUT_DATA_DIR: dataDir, MCP_MASTER_KEY: '', LAUNCHSCOUT_DEFAULT_ADMIN: 'true' };
 let child = spawn(process.execPath, ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 const base = `http://127.0.0.1:${port}`;
@@ -36,6 +37,13 @@ try {
   assert.equal(restoredSession.body.csrfToken, login.body.csrfToken);
   const account = await request('/api/account');
   assert.equal(account.body.account.email, 'LaunchScout');
+  const providers = await request('/api/admin/providers');
+  assert.equal(providers.response.status, 200);
+  assert.equal(providers.body.providers[0].id, 'provider-test');
+  const providerUpdated = await request('/api/admin/providers/provider-test', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken }, body: JSON.stringify({ name: 'Feed atualizado', enabled: false }) });
+  assert.equal(providerUpdated.response.status, 200);
+  assert.equal(providerUpdated.body.provider.name, 'Feed atualizado');
+  assert.equal(providerUpdated.body.provider.enabled, false);
   const generated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': restoredSession.body.csrfToken } });
   assert.equal(generated.response.status, 200);
   assert.match(generated.body.token, /^lr_[a-f0-9]{64}$/);
