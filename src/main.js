@@ -22,6 +22,7 @@ const icon = (name, size = 18) => {
 };
 
 const INTERNAL_MCP_ENDPOINT = `${window.location.origin}/api/mcp`;
+const MAX_SEARCH_RESULTS = 300;
 const state = {
   auth: null,
   csrfToken: '',
@@ -36,13 +37,20 @@ const state = {
   producer: 'Todos',
   status: 'Todos',
   sort: 'relevance',
-  searchLimit: 50,
+  searchLimit: MAX_SEARCH_RESULTS,
   view: 'catalog',
   settingsOpen: false,
   editingConnectionId: 'primary',
   providers: [],
   editingProviderId: '',
   providerImportFeedback: null,
+  agentModeOpen: false,
+  agentQuestion: '',
+  agentSearchLoading: false,
+  agentSearchError: '',
+  agentSearchResponse: null,
+  agentSearchConfig: { provider: 'exa', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini', context: '', configured: false },
+  agentSearchConfigLoading: false,
   pendingToken: '',
   tokenGenerating: false,
   tokenNotice: '',
@@ -144,7 +152,7 @@ function getFilteredLaunches() {
     if (state.sort === 'discovered') return new Date(b.discoveredAt) - new Date(a.discoveredAt);
     if (state.sort === 'saved') return Number(b.saved) - Number(a.saved);
     return Number(b.saved) - Number(a.saved) || new Date(a.date) - new Date(b.date);
-  });
+  }).slice(0, MAX_SEARCH_RESULTS);
 }
 
 function statCards() {
@@ -211,7 +219,12 @@ function renderFilters() {
 
 function renderCatalog() {
   const launches = getFilteredLaunches();
-  return `<section class="catalog-section"><div class="section-heading"><div><div class="eyebrow">CATÁLOGO AO VIVO</div><h2>Radar de lançamentos <span>${launches.length}</span></h2></div><button class="view-toggle" data-action="settings">${icon('settings', 15)} Conexões <span class="connection-badge">${state.config.connections.filter((connection) => connection.connected).length}/${state.config.connections.length}</span></button></div>${renderFilters()}${launches.length ? `<div class="launch-grid">${launches.map(renderLaunchCard).join('')}</div>` : `<div class="empty-state">${icon('radar', 32)}<h3>Nenhum sinal encontrado</h3><p>Tente remover um filtro ou execute uma nova busca no radar.</p><button class="primary-button" data-action="clear-filters">Limpar filtros</button></div>`}</section>`;
+  return `<section class="catalog-section"><div class="section-heading"><div><div class="eyebrow">CATÁLOGO AO VIVO</div><h2>Radar de lançamentos <span>${launches.length}</span></h2></div><div class="catalog-actions"><button class="view-toggle ${state.agentModeOpen ? 'active' : ''}" data-action="toggle-agent-mode">${icon('spark', 15)} Modo agente</button><button class="view-toggle" data-action="settings">${icon('settings', 15)} Conexões <span class="connection-badge">${state.config.connections.filter((connection) => connection.connected).length}/${state.config.connections.length}</span></button></div></div>${renderFilters()}${state.agentModeOpen ? renderAgentSearchPanel() : ''}${launches.length ? `<div class="launch-grid">${launches.map(renderLaunchCard).join('')}</div>` : `<div class="empty-state"><svg aria-hidden="true" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 12 18.5 5.5"/></svg><h3>Nenhum sinal encontrado</h3><p>Tente remover um filtro ou execute uma nova busca no radar.</p><button class="primary-button" data-action="clear-filters">Limpar filtros</button></div>`}</section>`;
+}
+
+function renderAgentSearchPanel() {
+  const response = state.agentSearchResponse;
+  return `<section class="agent-search-panel"><div class="agent-search-heading"><div><div class="eyebrow lime">PESQUISA CONTEXTUAL</div><h3>Pergunte ao agente</h3><p>As respostas consideram o foco definido nas configurações e os filtros selecionados neste painel.</p></div><span class="agent-provider-badge">${state.agentSearchConfig.configured ? esc(state.agentSearchConfig.provider === 'exa' ? 'Exa' : 'Agente IA') : 'Não configurado'}</span></div><form data-form="agent-search"><label class="agent-question-label" for="agent-search-question">O que você está procurando?</label><textarea id="agent-search-question" name="question" maxlength="1000" required placeholder="Ex.: eventos de inteligência artificial para empreendedores nos próximos meses">${esc(state.agentQuestion)}</textarea><div class="agent-search-actions"><small>${state.agentSearchConfig.configured ? 'A chave de API é usada apenas pelo servidor.' : 'Um administrador deve configurar uma chave de API em Configurações MCP.'}</small><button class="primary-button" type="submit" ${state.agentSearchLoading || !state.agentSearchConfig.configured ? 'disabled' : ''}>${icon('spark', 15)} ${state.agentSearchLoading ? 'Pesquisando…' : 'Pesquisar'}</button></div></form>${state.agentSearchError ? `<div class="agent-search-error" role="alert">${esc(state.agentSearchError)}</div>` : ''}${response ? `<div class="agent-search-response"><p class="agent-search-answer">${esc(response.answer || 'Resultados encontrados para a sua pergunta.')}</p>${response.results.length ? `<div class="agent-search-results">${response.results.map((item) => `<article class="agent-search-result"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>${item.summary ? `<p>${esc(item.summary)}</p>` : ''}<small>${esc(item.publisher || item.publishedAt || new URL(item.url).hostname)}</small></article>`).join('')}</div>` : '<p class="agent-search-empty">Nenhum resultado com fonte verificável.</p>'}</div>` : ''}</section>`;
 }
 
 function renderSavedView() {
@@ -271,6 +284,13 @@ function renderProviderManagement() {
   const providers = state.providers.map((provider) => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.url)}</small><small>${provider.enabled ? 'Ativo' : 'Desativado'} · ${esc(provider.status || 'não testado')}</small></div><button type="button" class="text-button" data-action="edit-provider" data-id="${esc(provider.id)}">Editar</button></div>`).join('');
   section.innerHTML = `<div class="list-heading"><span>Provedores configurados <b>${state.providers.length}</b></span></div>${providers}`;
 
+  const agentForm = document.createElement('form');
+  agentForm.className = 'agent-search-config';
+  agentForm.dataset.form = 'agent-search-config';
+  const agentConfig = state.agentSearchConfig;
+  agentForm.innerHTML = `<div class="list-heading"><span>Modo agente</span><span class="label-note">${state.agentSearchConfigLoading ? 'A carregar...' : agentConfig.configured ? 'Chave configurada' : 'Requer chave de API'}</span></div><label>Provedor<select name="provider"><option value="exa" ${agentConfig.provider === 'exa' ? 'selected' : ''}>Exa AI Search</option><option value="openai-compatible" ${agentConfig.provider === 'openai-compatible' ? 'selected' : ''}>API compatível com OpenAI</option></select></label><label class="agent-config-api">Chave de API<input name="apiKey" type="password" autocomplete="new-password" placeholder="${agentConfig.configured ? 'Configurada; vazio mantém a atual' : 'Cole a chave de API'}" /></label><label class="agent-config-endpoint">Endpoint HTTPS compatível<input name="endpoint" type="url" value="${esc(agentConfig.endpoint)}" placeholder="https://api.openai.com/v1" /></label><label class="agent-config-model">Modelo<input name="model" value="${esc(agentConfig.model)}" placeholder="gpt-4o-mini" /></label><label>Contexto do radar<textarea name="context" maxlength="2000" placeholder="Ex.: lançamentos SaaS B2B para pequenas empresas, em português">${esc(agentConfig.context)}</textarea></label><label class="agent-config-clear"><input type="checkbox" name="clearApiKey" /> Remover a chave guardada</label><button class="ghost-button" type="submit" ${state.agentSearchConfigLoading ? 'disabled' : ''}>Salvar configuração do agente</button><small class="provider-help">A chave é cifrada no servidor e nunca enviada ao navegador. A API compatível deve devolver JSON com <code>answer</code> e <code>results</code>.</small>`;
+  section.append(agentForm);
+
   const provider = state.providers.find((item) => item.id === state.editingProviderId);
   if (provider) {
     const form = document.createElement('form');
@@ -282,6 +302,7 @@ function renderProviderManagement() {
   panel.append(section);
   const emptyHint = panel.querySelector('.provider-empty-help');
   if (emptyHint && state.providers.length) emptyHint.remove();
+  updateAgentSearchConfigFields(agentForm);
 }
 
 function renderAuth() {
@@ -334,11 +355,44 @@ async function loadExternalProviders() {
   }
 }
 
+function updateAgentSearchConfigFields(form) {
+  const provider = form.querySelector('[name="provider"]')?.value;
+  const customProvider = provider === 'openai-compatible';
+  for (const selector of ['.agent-config-endpoint', '.agent-config-model']) {
+    const field = form.querySelector(selector);
+    if (field) field.hidden = !customProvider;
+  }
+  const endpoint = form.querySelector('[name="endpoint"]');
+  const model = form.querySelector('[name="model"]');
+  if (endpoint) endpoint.required = customProvider;
+  if (model) model.required = customProvider;
+}
+
+async function loadAgentSearchConfig() {
+  if (!state.auth) return;
+  state.agentSearchConfigLoading = true;
+  try {
+    const response = await fetch('/api/agent-search/config', { headers: { Accept: 'application/json' } });
+    const payload = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível carregar a configuração do agente.');
+    state.agentSearchConfig = payload.config;
+  } catch (error) {
+    toast(`Configuração do agente indisponível: ${error.message}`);
+  } finally {
+    state.agentSearchConfigLoading = false;
+    if (state.settingsOpen) renderApp();
+  }
+}
+
 async function hydrateCatalog() {
   if (!state.auth) return;
   state.syncStatus = 'loading'; state.syncError = ''; renderApp();
   try {
-    const response = await fetch('/api/catalog?limit=100');
+    const configResponse = await fetch('/api/agent-search/config', { headers: { Accept: 'application/json' } });
+    const configPayload = await parseJsonResponse(configResponse);
+    if (!configResponse.ok) throw new Error(configPayload.error?.message || 'Não foi possível carregar a configuração do agente.');
+    state.agentSearchConfig = { ...state.agentSearchConfig, ...configPayload.config };
+    const response = await fetch(`/api/catalog?limit=${MAX_SEARCH_RESULTS}`);
     const payload = await parseJsonResponse(response);
     if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível carregar o catálogo.');
     state.launches = (payload.items || []).map((raw, index) => { const item = normalizeMcpItem(raw, index, { endpoint: INTERNAL_MCP_ENDPOINT }); return item ? { ...item, saved: Boolean(raw.saved), status: raw.verification === 'confirmed' ? 'confirmed' : item.status } : null; }).filter(Boolean);
@@ -424,7 +478,7 @@ async function runDiscovery() {
   try {
     const argumentsForSearch = { query: state.query || undefined, event_name: state.eventName || undefined, product_type: state.type !== 'Todos' ? state.type : undefined, producer_name: state.producer !== 'Todos' ? state.producer : undefined, source: state.platform !== 'Todas' ? state.platform : undefined, date_window_days: state.period === 'Próximos 7 dias' ? 7 : state.period === 'Este mês' ? 31 : 90, limit: state.searchLimit, sort_by: state.sort === 'date' ? 'date' : 'score' };
     const agentSearch = await collectAgentSearchResults(connectedSources, callMcp, argumentsForSearch, normalizeMcpItem);
-    const uniqueItems = [...new Map([...localItems, ...agentSearch.items].map((item) => [`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`, item])).values()];
+    const uniqueItems = [...new Map([...localItems, ...agentSearch.items].map((item) => [`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`, item])).values()].slice(0, MAX_SEARCH_RESULTS);
     if (uniqueItems.length) {
       const uniqueKeys = new Set(uniqueItems.map((item) => `${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`));
       state.launches = [...uniqueItems, ...state.launches.filter((item) => !uniqueKeys.has(`${item.title.toLowerCase()}|${item.date}|${item.producer.toLowerCase()}`))];
@@ -464,7 +518,8 @@ app.addEventListener('click', (event) => {
   if (action === 'auth-login') { state.authMode = 'login'; state.authError = ''; renderApp(); return; }
   if (action === 'auth-register') { state.authMode = 'register'; state.authError = ''; renderApp(); return; }
   if (action === 'logout') { fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).finally(() => { state.auth = null; state.csrfToken = ''; state.settingsOpen = false; renderApp(); }); return; }
-  if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; state.editingProviderId = ''; renderApp(); loadExternalProviders(); return; }
+  if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; state.editingProviderId = ''; renderApp(); loadExternalProviders(); loadAgentSearchConfig(); return; }
+  if (action === 'toggle-agent-mode') { state.agentModeOpen = !state.agentModeOpen; renderApp(); if (state.agentModeOpen) app.querySelector('[data-form="agent-search"] [name="question"]')?.focus(); return; }
   if (action === 'close-settings') { state.settingsOpen = false; renderApp(); return; }
   if (action === 'edit-provider') { state.editingProviderId = actionTarget.dataset.id; renderApp(); return; }
   if (action === 'cancel-provider-edit') { state.editingProviderId = ''; renderApp(); return; }
@@ -568,9 +623,73 @@ app.addEventListener('input', (event) => {
 app.addEventListener('change', (event) => {
   const filter = event.target.dataset.filter;
   if (filter) { state[filter] = event.target.value; renderApp(); }
+  if (event.target.matches('[data-form="agent-search-config"] [name="provider"]')) updateAgentSearchConfigFields(event.target.form);
 });
 
 app.addEventListener('submit', (event) => {
+  if (event.target.matches('[data-form="agent-search"]')) {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    state.agentQuestion = String(form.get('question') || '').trim();
+    state.agentSearchError = '';
+    state.agentSearchResponse = null;
+    state.agentSearchLoading = true;
+    renderApp();
+    (async () => {
+      try {
+        const response = await fetch('/api/agent-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
+          body: JSON.stringify({
+            question: state.agentQuestion,
+            filters: { tipo: state.type, fonte: state.platform, produtor: state.producer, período: state.period }
+          })
+        });
+        const payload = await parseJsonResponse(response);
+        if (!response.ok) throw new Error(payload.error?.message || 'A pesquisa com agente falhou.');
+        state.agentSearchResponse = payload;
+      } catch (error) {
+        state.agentSearchError = error.message;
+      } finally {
+        state.agentSearchLoading = false;
+        renderApp();
+      }
+    })();
+    return;
+  }
+  if (event.target.matches('[data-form="agent-search-config"]')) {
+    event.preventDefault();
+    const formElement = event.target;
+    const form = new FormData(formElement);
+    const submit = formElement.querySelector('button[type="submit"]');
+    if (submit) { submit.disabled = true; submit.textContent = 'Salvando…'; }
+    (async () => {
+      try {
+        const response = await fetch('/api/agent-search/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
+          body: JSON.stringify({
+            provider: form.get('provider'),
+            endpoint: form.get('endpoint'),
+            model: form.get('model'),
+            context: form.get('context'),
+            apiKey: form.get('apiKey'),
+            clearApiKey: form.get('clearApiKey') === 'on'
+          })
+        });
+        const payload = await parseJsonResponse(response);
+        if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível salvar o agente.');
+        state.agentSearchConfig = payload.config;
+        renderApp();
+        toast('Configuração do modo agente salva.', 'success');
+      } catch (error) {
+        toast(`Configuração do agente não salva: ${error.message}`);
+      } finally {
+        if (submit?.isConnected) { submit.disabled = false; submit.textContent = 'Salvar configuração do agente'; }
+      }
+    })();
+    return;
+  }
   if (event.target.matches('[data-form="login"]') || event.target.matches('[data-form="register"]')) {
     event.preventDefault();
     const form = new FormData(event.target);
