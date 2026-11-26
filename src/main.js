@@ -44,7 +44,7 @@ const state = {
   providers: [],
   editingProviderId: '',
   providerImportFeedback: null,
-  agentModeOpen: false,
+  aiModeEnabled: false,
   agentQuestion: '',
   agentSearchLoading: false,
   agentSearchError: '',
@@ -219,12 +219,12 @@ function renderFilters() {
 
 function renderCatalog() {
   const launches = getFilteredLaunches();
-  return `<section class="catalog-section"><div class="section-heading"><div><div class="eyebrow">CATÁLOGO AO VIVO</div><h2>Radar de lançamentos <span>${launches.length}</span></h2></div><div class="catalog-actions"><button class="view-toggle ${state.agentModeOpen ? 'active' : ''}" data-action="toggle-agent-mode">${icon('spark', 15)} Modo agente</button><button class="view-toggle" data-action="settings">${icon('settings', 15)} Conexões <span class="connection-badge">${state.config.connections.filter((connection) => connection.connected).length}/${state.config.connections.length}</span></button></div></div>${renderFilters()}${state.agentModeOpen ? renderAgentSearchPanel() : ''}${launches.length ? `<div class="launch-grid">${launches.map(renderLaunchCard).join('')}</div>` : `<div class="empty-state"><svg aria-hidden="true" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 12 18.5 5.5"/></svg><h3>Nenhum sinal encontrado</h3><p>Tente remover um filtro ou execute uma nova busca no radar.</p><button class="primary-button" data-action="clear-filters">Limpar filtros</button></div>`}</section>`;
+  return `<section class="catalog-section"><div class="section-heading"><div><div class="eyebrow">CATÁLOGO AO VIVO</div><h2>Radar de lançamentos <span>${launches.length}</span></h2></div><div class="catalog-actions"><button class="view-toggle ${state.aiModeEnabled ? 'active' : ''}" data-action="toggle-ai-mode" aria-pressed="${state.aiModeEnabled}">${icon('spark', 15)} ${state.aiModeEnabled ? 'Desativar Modo IA' : 'Ativar Modo IA'}</button><button class="view-toggle" data-action="settings">${icon('settings', 15)} Agentes MCP <span class="connection-badge">${state.config.connections.filter((connection) => connection.connected).length}/${state.config.connections.length}</span></button></div></div>${renderFilters()}${state.aiModeEnabled ? renderAgentSearchPanel() : ''}${launches.length ? `<div class="launch-grid">${launches.map(renderLaunchCard).join('')}</div>` : `<div class="empty-state"><svg aria-hidden="true" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 12 18.5 5.5"/></svg><h3>Nenhum sinal encontrado</h3><p>Tente remover um filtro ou execute uma nova busca no radar.</p><button class="primary-button" data-action="clear-filters">Limpar filtros</button></div>`}</section>`;
 }
 
 function renderAgentSearchPanel() {
   const response = state.agentSearchResponse;
-  return `<section class="agent-search-panel"><div class="agent-search-heading"><div><div class="eyebrow lime">PESQUISA CONTEXTUAL</div><h3>Pergunte ao agente</h3><p>As respostas consideram o foco definido nas configurações e os filtros selecionados neste painel.</p></div><span class="agent-provider-badge">${state.agentSearchConfig.configured ? esc(state.agentSearchConfig.provider === 'exa' ? 'Exa' : 'Agente IA') : 'Não configurado'}</span></div><form data-form="agent-search"><label class="agent-question-label" for="agent-search-question">O que você está procurando?</label><textarea id="agent-search-question" name="question" maxlength="1000" required placeholder="Ex.: eventos de inteligência artificial para empreendedores nos próximos meses">${esc(state.agentQuestion)}</textarea><div class="agent-search-actions"><small>${state.agentSearchConfig.configured ? 'A chave de API é usada apenas pelo servidor.' : 'Um administrador deve configurar uma chave de API em Configurações MCP.'}</small><button class="primary-button" type="submit" ${state.agentSearchLoading || !state.agentSearchConfig.configured ? 'disabled' : ''}>${icon('spark', 15)} ${state.agentSearchLoading ? 'Pesquisando…' : 'Pesquisar'}</button></div></form>${state.agentSearchError ? `<div class="agent-search-error" role="alert">${esc(state.agentSearchError)}</div>` : ''}${response ? `<div class="agent-search-response"><p class="agent-search-answer">${esc(response.answer || 'Resultados encontrados para a sua pergunta.')}</p>${response.results.length ? `<div class="agent-search-results">${response.results.map((item) => `<article class="agent-search-result"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>${item.summary ? `<p>${esc(item.summary)}</p>` : ''}<small>${esc(item.publisher || item.publishedAt || new URL(item.url).hostname)}</small></article>`).join('')}</div>` : '<p class="agent-search-empty">Nenhum resultado com fonte verificável.</p>'}</div>` : ''}</section>`;
+  return `<section class="agent-search-panel"><div class="agent-search-heading"><div><div class="eyebrow lime">PESQUISA CONTEXTUAL</div><h3>Modo IA</h3><p>Use uma pergunta própria ou pesquise diretamente com o contexto e os filtros configurados no radar.</p></div><span class="agent-provider-badge">${state.agentSearchConfig.configured ? esc(state.agentSearchConfig.provider === 'exa' ? 'Exa' : 'Agente IA') : 'Não configurado'}</span></div><form data-form="agent-search"><label class="agent-question-label" for="agent-search-question">Pergunta opcional</label><textarea id="agent-search-question" name="question" maxlength="1000" placeholder="Ex.: eventos de inteligência artificial para empreendedores nos próximos meses">${esc(state.agentQuestion)}</textarea><div class="agent-search-actions"><small>${state.agentSearchConfig.configured ? 'A chave de API é usada apenas pelo servidor.' : 'Um administrador deve configurar uma chave de API em Configurações MCP.'}</small><div class="agent-search-buttons"><button class="ghost-button" type="button" data-action="agent-search-context" ${state.agentSearchLoading || !state.agentSearchConfig.configured ? 'disabled' : ''}>${icon('search', 15)} ${state.agentSearchLoading ? 'Pesquisando…' : 'Buscar com contexto'}</button><button class="primary-button" type="submit" ${state.agentSearchLoading || !state.agentSearchConfig.configured ? 'disabled' : ''}>${icon('spark', 15)} Perguntar à IA</button></div></div></form>${state.agentSearchError ? `<div class="agent-search-error" role="alert">${esc(state.agentSearchError)}</div>` : ''}${response ? `<div class="agent-search-response"><p class="agent-search-answer">${esc(response.answer || 'Resultados encontrados para a sua pergunta.')}</p>${response.results.length ? `<div class="agent-search-results">${response.results.map((item) => `<article class="agent-search-result"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>${item.summary ? `<p>${esc(item.summary)}</p>` : ''}<small>${esc(item.publisher || item.publishedAt || new URL(item.url).hostname)}</small></article>`).join('')}</div>` : '<p class="agent-search-empty">Nenhum resultado com fonte verificável.</p>'}</div>` : ''}</section>`;
 }
 
 function renderSavedView() {
@@ -288,7 +288,7 @@ function renderProviderManagement() {
   agentForm.className = 'agent-search-config';
   agentForm.dataset.form = 'agent-search-config';
   const agentConfig = state.agentSearchConfig;
-  agentForm.innerHTML = `<div class="list-heading"><span>Modo agente</span><span class="label-note">${state.agentSearchConfigLoading ? 'A carregar...' : agentConfig.configured ? 'Chave configurada' : 'Requer chave de API'}</span></div><label>Provedor<select name="provider"><option value="exa" ${agentConfig.provider === 'exa' ? 'selected' : ''}>Exa AI Search</option><option value="openai-compatible" ${agentConfig.provider === 'openai-compatible' ? 'selected' : ''}>API compatível com OpenAI</option></select></label><label class="agent-config-api">Chave de API<input name="apiKey" type="password" autocomplete="new-password" placeholder="${agentConfig.configured ? 'Configurada; vazio mantém a atual' : 'Cole a chave de API'}" /></label><label class="agent-config-endpoint">Endpoint HTTPS compatível<input name="endpoint" type="url" value="${esc(agentConfig.endpoint)}" placeholder="https://api.openai.com/v1" /></label><label class="agent-config-model">Modelo<input name="model" value="${esc(agentConfig.model)}" placeholder="gpt-4o-mini" /></label><label>Contexto do radar<textarea name="context" maxlength="2000" placeholder="Ex.: lançamentos SaaS B2B para pequenas empresas, em português">${esc(agentConfig.context)}</textarea></label><label class="agent-config-clear"><input type="checkbox" name="clearApiKey" /> Remover a chave guardada</label><button class="ghost-button" type="submit" ${state.agentSearchConfigLoading ? 'disabled' : ''}>Salvar configuração do agente</button><small class="provider-help">A chave é cifrada no servidor e nunca enviada ao navegador. A API compatível deve devolver JSON com <code>answer</code> e <code>results</code>.</small>`;
+  agentForm.innerHTML = `<div class="list-heading"><span>Modo IA</span><span class="label-note">${state.agentSearchConfigLoading ? 'A carregar...' : agentConfig.configured ? 'Chave configurada' : 'Requer chave de API'}</span></div><label>Provedor<select name="provider"><option value="exa" ${agentConfig.provider === 'exa' ? 'selected' : ''}>Exa AI Search</option><option value="openai-compatible" ${agentConfig.provider === 'openai-compatible' ? 'selected' : ''}>API compatível com OpenAI</option></select></label><label class="agent-config-api">Chave de API<input name="apiKey" type="password" autocomplete="new-password" placeholder="${agentConfig.configured ? 'Configurada; vazio mantém a atual' : 'Cole a chave de API'}" /></label><label class="agent-config-endpoint">Endpoint HTTPS compatível<input name="endpoint" type="url" value="${esc(agentConfig.endpoint)}" placeholder="https://api.openai.com/v1" /></label><label class="agent-config-model">Modelo<input name="model" value="${esc(agentConfig.model)}" placeholder="gpt-4o-mini" /></label><label>Contexto do radar<textarea name="context" maxlength="2000" placeholder="Ex.: lançamentos SaaS B2B para pequenas empresas, em português">${esc(agentConfig.context)}</textarea></label><label class="agent-config-clear"><input type="checkbox" name="clearApiKey" /> Remover a chave guardada</label><button class="ghost-button" type="submit" ${state.agentSearchConfigLoading ? 'disabled' : ''}>Salvar configuração do Modo IA</button><small class="provider-help">A chave é cifrada no servidor e nunca enviada ao navegador. A API compatível deve devolver JSON com <code>answer</code> e <code>results</code>.</small>`;
   section.append(agentForm);
 
   const provider = state.providers.find((item) => item.id === state.editingProviderId);
@@ -410,7 +410,7 @@ async function callMcp(connection, method, params = {}) {
     const response = await fetch(connection.endpoint, {
       method: 'POST',
       mode: 'cors',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(connection.token ? { Authorization: `Bearer ${connection.token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(connection.token ? { Authorization: `Bearer ${connection.token}` } : {}) },
       body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
       signal: controller.signal
     });
@@ -501,6 +501,32 @@ async function runDiscovery() {
   }
 }
 
+async function runAgentSearch(question) {
+  state.agentQuestion = question.trim();
+  state.agentSearchError = '';
+  state.agentSearchResponse = null;
+  state.agentSearchLoading = true;
+  renderApp();
+  try {
+    const response = await fetch('/api/agent-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
+      body: JSON.stringify({
+        question: state.agentQuestion,
+        filters: { tipo: state.type, fonte: state.platform, produtor: state.producer, período: state.period }
+      })
+    });
+    const payload = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(payload.error?.message || 'A pesquisa com IA falhou.');
+    state.agentSearchResponse = payload;
+  } catch (error) {
+    state.agentSearchError = error.message;
+  } finally {
+    state.agentSearchLoading = false;
+    renderApp();
+  }
+}
+
 app.addEventListener('click', (event) => {
   const actionTarget = event.target.closest('[data-action], [data-view]');
   if (!actionTarget) return;
@@ -519,7 +545,8 @@ app.addEventListener('click', (event) => {
   if (action === 'auth-register') { state.authMode = 'register'; state.authError = ''; renderApp(); return; }
   if (action === 'logout') { fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': state.csrfToken } }).finally(() => { state.auth = null; state.csrfToken = ''; state.settingsOpen = false; renderApp(); }); return; }
   if (action === 'settings') { state.settingsOpen = true; state.editingConnectionId = state.config.connections[0]?.id || 'new'; state.editingProviderId = ''; renderApp(); loadExternalProviders(); loadAgentSearchConfig(); return; }
-  if (action === 'toggle-agent-mode') { state.agentModeOpen = !state.agentModeOpen; renderApp(); if (state.agentModeOpen) app.querySelector('[data-form="agent-search"] [name="question"]')?.focus(); return; }
+  if (action === 'toggle-ai-mode') { state.aiModeEnabled = !state.aiModeEnabled; renderApp(); if (state.aiModeEnabled) app.querySelector('[data-form="agent-search"] [name="question"]')?.focus(); return; }
+  if (action === 'agent-search-context') { runAgentSearch('Pesquise oportunidades relevantes de acordo com o contexto pré-configurado do radar.'); return; }
   if (action === 'close-settings') { state.settingsOpen = false; renderApp(); return; }
   if (action === 'edit-provider') { state.editingProviderId = actionTarget.dataset.id; renderApp(); return; }
   if (action === 'cancel-provider-edit') { state.editingProviderId = ''; renderApp(); return; }
@@ -630,31 +657,8 @@ app.addEventListener('submit', (event) => {
   if (event.target.matches('[data-form="agent-search"]')) {
     event.preventDefault();
     const form = new FormData(event.target);
-    state.agentQuestion = String(form.get('question') || '').trim();
-    state.agentSearchError = '';
-    state.agentSearchResponse = null;
-    state.agentSearchLoading = true;
-    renderApp();
-    (async () => {
-      try {
-        const response = await fetch('/api/agent-search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
-          body: JSON.stringify({
-            question: state.agentQuestion,
-            filters: { tipo: state.type, fonte: state.platform, produtor: state.producer, período: state.period }
-          })
-        });
-        const payload = await parseJsonResponse(response);
-        if (!response.ok) throw new Error(payload.error?.message || 'A pesquisa com agente falhou.');
-        state.agentSearchResponse = payload;
-      } catch (error) {
-        state.agentSearchError = error.message;
-      } finally {
-        state.agentSearchLoading = false;
-        renderApp();
-      }
-    })();
+    const question = String(form.get('question') || '').trim();
+    runAgentSearch(question || 'Pesquise oportunidades relevantes de acordo com o contexto pré-configurado do radar.');
     return;
   }
   if (event.target.matches('[data-form="agent-search-config"]')) {
@@ -681,11 +685,11 @@ app.addEventListener('submit', (event) => {
         if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível salvar o agente.');
         state.agentSearchConfig = payload.config;
         renderApp();
-        toast('Configuração do modo agente salva.', 'success');
+        toast('Configuração do Modo IA salva.', 'success');
       } catch (error) {
         toast(`Configuração do agente não salva: ${error.message}`);
       } finally {
-        if (submit?.isConnected) { submit.disabled = false; submit.textContent = 'Salvar configuração do agente'; }
+        if (submit?.isConnected) { submit.disabled = false; submit.textContent = 'Salvar configuração do Modo IA'; }
       }
     })();
     return;
