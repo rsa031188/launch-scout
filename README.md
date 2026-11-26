@@ -1,87 +1,186 @@
 # LaunchScout
 
-LaunchScout é uma aplicação Node.js unificada: o radar, o endpoint MCP, a geração de tokens e o catálogo persistente vivem no mesmo servidor e no mesmo domínio. O catálogo preserva `source`, `discoveredAt` e `registration` em cada lançamento para manter a proveniência do sinal.
+LaunchScout é um radar pessoal para descobrir, organizar e acompanhar lançamentos independentes, eventos, workshops e outras oportunidades. A aplicação reúne interface web, catálogo persistente, pesquisa RSS e um servidor MCP no mesmo processo Node.js e domínio.
 
-## Executar localmente
+## Funcionalidades
 
-Requisito: Node.js 20.19 ou superior. Instale as dependências e inicie a aplicação:
+- Dashboard e catálogo com pesquisa, filtros, ordenação e lista de favoritos.
+- Contas com registo e login; a conta administrativa controla configurações e provedores.
+- Pesquisa de feeds RSS públicos, com resultados e histórico guardados no servidor.
+- Cadastro individual de feeds RSS ou importação em lote a partir de um arquivo JSON.
+- Cards com descrições limitadas a 200 caracteres e imagens de pré-visualização das páginas dos eventos quando disponíveis.
+- Conexões MCP para pesquisar em agentes externos; os resultados podem ser combinados com os feeds RSS.
+- API MCP com ferramentas de descoberta, pesquisa, gestão de lançamentos e consulta do estado da plataforma.
+- Interface responsiva em português.
+
+O catálogo não inventa resultados: para encontrar dados reais, configure fontes RSS públicas ou agentes MCP válidos. A pesquisa é iniciada pela interface ou por uma chamada externa ao MCP; **não existe um agendador, worker em segundo plano, envio automático de e-mail ou notificação push integrado**. Para executar buscas em horários definidos, configure uma automação externa para chamar a ferramenta `discover_launches` pelo MCP.
+
+## Tecnologia
+
+- **Frontend:** HTML, CSS e JavaScript ES modules, compilados com Vite.
+- **Servidor:** Node.js com `node:http`; o mesmo processo serve a interface compilada, a API e o endpoint MCP.
+- **MCP:** JSON-RPC 2.0 sobre HTTP, em `/api/mcp`, com autenticação Bearer.
+- **Persistência:** arquivo JSON em `LAUNCHSCOUT_DATA_DIR/launchscout.json`; não requer banco de dados externo.
+- **Autenticação:** passwords com bcrypt, sessão em cookie HttpOnly, proteção CSRF e token MCP armazenado cifrado com AES-256-GCM e verificado por hash SHA-256.
+
+## Requisitos
+
+- Node.js **20.19 ou superior** e npm.
+- Acesso à internet no servidor para consultar feeds públicos.
+- Para hospedagem, um plano que permita executar uma aplicação Node.js persistente, configurar variáveis de ambiente e associar o domínio à aplicação. Hospedagem apenas estática ou apenas PHP não é suficiente.
+
+## Instalação local
+
+Clone o repositório, instale as dependências e inicie o servidor:
 
 ```bash
+git clone https://github.com/rsa031188/launch-scout.git
+cd launch-scout
 npm ci
 npm start
 ```
 
-Na primeira execução, `npm start` gera uma `MCP_MASTER_KEY` aleatória em `.env` e carrega o arquivo automaticamente; `npm run setup:local` também pode ser executado separadamente. Para iniciar em modo de desenvolvimento, use `npm run dev`. Se o servidor iniciar sem a variável, ele gera uma chave binária de 32 bytes em `LAUNCHSCOUT_DATA_DIR/mcp-master.key`. O `.env` e o diretório `data/` são excluídos do Git. Preserve a chave e o diretório de dados: sem eles, o servidor não consegue descriptografar credenciais salvas.
+O servidor fica disponível em `http://localhost:3000` por padrão. Na primeira execução, `npm start` cria uma `MCP_MASTER_KEY` em `.env` se ainda não existir. O Node carrega esse arquivo ao iniciar. O arquivo `.env` e o diretório `data/` estão excluídos do Git; não os publique.
 
-Se iniciar diretamente com Node, carregue o arquivo `.env` explicitamente:
+Por conveniência, uma instalação vazia cria temporariamente o administrador `LaunchScout` com a password `Launch_admin`. Entre e altere a password imediatamente. Antes de expor a aplicação publicamente, defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` e crie o administrador pelo bootstrap protegido descrito em [Autenticação e segurança](#autenticação-e-segurança).
+
+### Comandos locais
+
+| Comando | Uso |
+| --- | --- |
+| `npm start` | Prepara a chave local, carrega `.env` e inicia `server.js`. |
+| `npm run dev` | Compila a interface, prepara a chave local e inicia o servidor Node. Não é um watcher com hot reload. |
+| `npm run build` | Compila a interface para `dist/` e gera `dist/main.js`. |
+| `npm run start:prod` | Inicia o entrypoint de produção `dist/main.js`; requer que o build já exista. |
+| `npm run start:production` | Compila, prepara a chave local e inicia o entrypoint de produção. |
+| `npm test` | Executa os testes de integração e smoke test. |
+| `npm run preview:static` | Pré-visualiza apenas a interface estática; não disponibiliza a API nem o MCP. |
+
+Se iniciar o servidor diretamente com Node, carregue `.env` explicitamente:
 
 ```bash
 npm run setup:local
 node --env-file-if-exists=.env server.js
 ```
 
-Executar apenas `node server.js` não carrega `.env`; nesse caso, defina `MCP_MASTER_KEY` no ambiente do processo. Se a interface ainda indicar que a chave não está configurada, confirme que iniciou o servidor na pasta correta e que o processo carregou `.env` ou recebeu essa variável, depois reinicie-o. A chave deve representar 32 bytes (base64 ou 64 caracteres hexadecimais).
+## Instalação em hospedagem Node.js (Hostinger)
 
-## Executar no ambiente Node.js da Hostinger
+Os nomes dos campos do painel podem variar; configure uma aplicação **Node.js**, não um site estático ou uma instalação WordPress.
 
-Na Hostinger, configure o projeto como **Outro / aplicação Node.js**, não como site estático Vite. Use `npm ci` para instalar, `npm run build` para compilar e gerar o entrypoint, e `npm run start:prod` para iniciar `dist/main.js`. Configure a raiz na pasta com `package.json` e aponte `LAUNCHSCOUT_DATA_DIR` para armazenamento persistente. `MCP_MASTER_KEY` pode ser fornecida como variável de ambiente; se estiver ausente, o servidor gera uma chave segura dentro do diretório de dados. O build inclui os arquivos Vite e o entrypoint Node; o servidor Node entrega a interface e as APIs no mesmo domínio. `npm start` é conveniente para desenvolvimento local; `npm run start:production` compila e inicia em uma única etapa. Não publique apenas o conteúdo estático de `dist/`.
+1. Aponte a raiz da aplicação para a pasta que contém `package.json`.
+2. Use Node.js 20.19 ou superior.
+3. Configure as variáveis de ambiente da seção seguinte no painel. Use o `PORT` fornecido pelo painel e defina `HOST=0.0.0.0`.
+4. Configure `LAUNCHSCOUT_DATA_DIR` para uma pasta gravável e persistente, fora da raiz pública do site. Preserve essa pasta entre deploys e inclua-a nos backups.
+5. Execute `npm ci` e `npm run build` durante a instalação ou etapa de build.
+6. Configure o comando de inicialização como `npm run start:prod` (ou `node --env-file-if-exists=.env dist/main.js`, se o painel exigir o comando diretamente).
+7. Associe o domínio à aplicação Node e publique atrás do HTTPS fornecido pelo painel/proxy.
+8. Abra `https://seu-dominio/health`; a resposta deve ser JSON e conter `"runtime":"node"`.
+9. Crie o administrador com o método de bootstrap seguro abaixo e entre na interface.
 
-Este projeto precisa que o processo Node permaneça ativo para atender `/api/*` e `/api/mcp`. `dist/` contém os arquivos Vite e `dist/main.js`, o entrypoint Node criado pelo build; não configure uma publicação estática que sirva somente os arquivos da pasta. Se o painel exigir um arquivo de entrada, use `dist/main.js`. O comando `npm run preview:static` é apenas para inspecionar o frontend localmente e não atende às APIs. Depois do arranque, `https://seu-dominio.com/health` deve responder JSON com `"runtime":"node"`. Se retornar 404 ou HTML, o domínio está servindo o deploy estático/outro site, ou não está associado ao processo Node correto.
+**Não publique apenas `dist/` como conteúdo estático.** O entrypoint `dist/main.js` inicia o servidor que fornece `/api/*` e `/api/mcp`, além da interface. `npm run start:production` também pode ser usado como comando único, mas para ambientes geridos é geralmente mais simples separar build (`npm ci` e `npm run build`) do comando de inicialização (`npm run start:prod`).
 
-O build de produção é gerado com `npm run build` em `dist/`.
+Se `/health` retornar HTML, 404 ou uma página de outro site, confira se o domínio aponta para a aplicação Node correta e se o painel está executando `dist/main.js`. `GET /api/mcp` também deve apresentar o estado do serviço MCP.
 
-## Hospedagem Hostinger
+## Configuração
 
-Na Hostinger, execute `npm ci` e `npm run build`; configure o início como `npm run start:prod` ou use `dist/main.js` como entrypoint. O servidor entrega a interface compilada e também o MCP em `/api/mcp`; não é necessário instalar o plugin WordPress para a operação principal. O catálogo é salvo em `LAUNCHSCOUT_DATA_DIR`, que deve apontar para armazenamento persistente e ser incluído no backup.
+As variáveis podem ser definidas no ambiente do processo ou em `.env` em instalações próprias. Em hospedagem, prefira os campos privados de variáveis do painel.
 
-Requisito: Node.js 20.19 ou superior.
+| Variável | Padrão / formato | Descrição |
+| --- | --- | --- |
+| `PORT` | `3000` | Porta HTTP; na hospedagem, use a porta fornecida pelo painel. |
+| `HOST` | `0.0.0.0` | Endereço de escuta do servidor. |
+| `LAUNCHSCOUT_DATA_DIR` | `data/` junto ao servidor | Diretório persistente para o catálogo, usuários, feeds, sessões e histórico. |
+| `MCP_MASTER_KEY` | Gerada localmente ou em `data/mcp-master.key` | Chave de 32 bytes, em Base64 ou 64 caracteres hexadecimais, usada para cifrar o token MCP. Preserve a chave junto dos dados. |
+| `LAUNCHSCOUT_DEFAULT_ADMIN` | Ativado, a menos que seja `false` | Define se a conta temporária padrão é criada numa instalação vazia. Desative em produção. |
+| `LAUNCHSCOUT_BOOTSTRAP_SECRET` | Sem padrão | Segredo exigido pelo endpoint de bootstrap para criar o primeiro administrador com segurança. |
+| `MCP_FIXED_TOKEN` | Desativado | Token MCP estável fornecido pelo operador; deve ter pelo menos 32 caracteres. |
+| `CORS_ORIGIN` | Sem CORS explícito | Origem exata permitida para chamadas cross-origin. Não é necessário para a interface servida no mesmo domínio. |
+| `NODE_ENV` | Definido pelo ambiente | Com valor `production`, o cookie de sessão recebe o atributo `Secure`. |
+| `COOKIE_SECURE` | Desativado | Defina como `true` para exigir cookie Secure mesmo fora de `NODE_ENV=production`. |
 
-Variáveis opcionais:
+Sem `MCP_MASTER_KEY`, o servidor cria e persiste uma chave aleatória em `LAUNCHSCOUT_DATA_DIR/mcp-master.key`. Se fornecer a chave por variável de ambiente, mantenha-a em segredo e guarde-a em backup seguro. Perder ou substituir a chave impede a leitura das credenciais MCP cifradas existentes.
+
+### Criar o administrador sem credenciais temporárias
+
+Em uma instalação nova, defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` e `LAUNCHSCOUT_BOOTSTRAP_SECRET` antes do primeiro arranque. Depois de confirmar que `GET /api/auth/bootstrap` indica que o bootstrap é necessário, envie uma única requisição:
 
 ```bash
-PORT=3000
-HOST=0.0.0.0
-LAUNCHSCOUT_DATA_DIR=/caminho/privado/data
-CORS_ORIGIN=https://seu-dominio.com
+curl -X POST "https://seu-dominio/api/auth/bootstrap" \
+  -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Secret: <LAUNCHSCOUT_BOOTSTRAP_SECRET>" \
+  --data '{"name":"Administrador","email":"admin@exemplo.com","password":"substitua-por-uma-password-forte"}'
 ```
 
-Use um proxy HTTPS do Hostinger para encaminhar o domínio público para a porta Node configurada.
+Use uma password com pelo menos 12 caracteres. O bootstrap só funciona enquanto não existir nenhum utilizador; depois, faça login pela interface. Nunca publique o segredo ou a password em código, Git ou logs compartilhados.
 
-Para confirmar que o domínio está ligado ao processo Node correto, abra `https://seu-dominio.com/health`. A resposta esperada é JSON contendo `"runtime":"node"`. Se aparecer uma página 404/HTML, o domínio ainda está a apontar para alojamento estático ou para outra aplicação; no painel, confirme que iniciou `dist/main.js`/`npm run start:prod` e aponte o domínio para a aplicação Node.
+## Fontes RSS
 
-## Autenticação e MCP
+Depois de entrar como administrador, abra **Configurações MCP → Pesquisa externa**. É possível adicionar uma fonte individualmente ou importar uma lista JSON. A importação aceita um array no nível superior, com até 100 entradas e arquivo de até 1 MB:
 
-Crie o primeiro administrador através do bootstrap protegido documentado em `docs/SECURITY-AND-HOSTINGER.md` e depois entre na interface. As operações administrativas de token exigem sessão autenticada e CSRF; visitantes não podem gerar, recuperar, consultar ou revogar credenciais. O agente primário usa automaticamente o endpoint relativo `/api/mcp`.
-
-O ecrã de acesso inclui o separador **Criar conta**. O utilizador pode definir nome, e-mail e password com confirmação; depois do registo válido, a sessão é iniciada automaticamente. Contas novas recebem o papel `user`; o papel `admin` continua reservado ao bootstrap/gestão administrativa.
-
-Por conveniência no primeiro arranque, uma instalação vazia cria `LaunchScout` / `Launch_admin` por padrão. Altere esta password imediatamente e defina `LAUNCHSCOUT_DEFAULT_ADMIN=false` na Hostinger; não mantenha esta credencial numa aplicação pública.
-
-### Ciclo de vida do token
-
-- **Primeira geração:** depois do login administrativo, use **Gerar token interno**.
-- **Rotação:** use **Gerar novo token e substituir**; o token anterior é invalidado imediatamente.
-- **Revogação:** use **Revogar token interno**; chamadas MCP deixam de funcionar na hora.
-- **Recuperação:** se o token foi perdido, use a recuperação autenticada; não é necessário apagar o armazenamento.
-
-O endpoint de geração autenticada é:
-
-```text
-POST /api/auth/generate
+```json
+[
+  {
+    "name": "Meu feed",
+    "url": "https://exemplo.org/feed.xml",
+    "category": "Tecnologia",
+    "language": "pt"
+  },
+  {
+    "name": "Outro feed",
+    "url": "https://news.exemplo.org/rss"
+  }
+]
 ```
 
-O servidor retorna o token de acesso MCP em texto puro somente na geração; use o botão **Copiar token MCP** para colá-lo no agente de IA. Não compartilhe `MCP_MASTER_KEY`: ela é somente para cifrar credenciais no servidor. O arquivo `data/launchscout.json` guarda a cifra AES-256-GCM e o hash SHA-256, nunca o token em texto puro. Publique a aplicação apenas em HTTPS e mantenha a chave mestra fora do repositório.
+`name` e `url` são obrigatórios. `category`, `language` e `enabled` são opcionais; `enabled` assume `true` por padrão. `type` também pode ser omitido ou definido como `"rss"`. A interface informa quantas fontes foram importadas e detalha cada linha rejeitada; entradas inválidas não impedem a importação das válidas.
 
-Se precisar de uma credencial estável definida pelo ambiente, configure `MCP_FIXED_TOKEN` com pelo menos 32 caracteres. Nesse modo, o mesmo token é aceite após reinícios e a rotação/revogação pela interface fica bloqueada; para o trocar, altere a variável e reinicie o servidor. Mantenha `MCP_FIXED_TOKEN` fora do repositório.
+O servidor aceita apenas URLs HTTP(S) públicas, sem credenciais, com portas permitidas, e rejeita endereços loopback, privados e link-local depois de verificar o DNS. A busca consulta os feeds habilitados, aplica timeout e limite de resposta, normaliza os lançamentos, deduplica resultados e grava o estado/histórico no armazenamento local. Os feeds são consultados quando uma busca é executada, não continuamente em segundo plano.
 
-O LaunchScout chama `initialize` para testar a conexão e `tools/call` com `search_launches` para pesquisar. O endpoint interno compartilha exatamente o mesmo armazenamento usado pelo radar.
+Quando um lançamento não inclui imagem própria, o navegador pede ao servidor uma pré-visualização da URL do evento. O servidor procura `og:image` ou `twitter:image`, valida a URL da página e da imagem e devolve a imagem apenas para sessões autenticadas. As imagens são carregadas sob demanda; páginas sem metadados de imagem ficam com o fundo padrão do card.
 
-## Pesquisa abrangente
+## MCP, conexões e automações
 
-O formulário pesquisa por nome do evento/lançamento e texto livre, além de filtros dinâmicos de plataforma/fonte, tipo de evento, produtor, período e interesse. As opções de plataforma, produtor e tipo são construídas a partir dos dados reais recebidos dos agentes. Os filtros são enviados ao MCP unificado como `event_name`, `source`, `product_type`, `producer_name`, `date_window_days` e `query`.
+O endpoint MCP é `https://seu-dominio/api/mcp`. As requisições MCP usam `Authorization: Bearer <token>` e JSON-RPC 2.0. A interface permite gerar, copiar, recuperar, rotacionar ou revogar o token interno após login administrativo, além de configurar conexões com agentes MCP externos.
 
-Se todos os agentes falharem, o sistema exibe o erro de conexão e não injeta resultados de demonstração. Verifique endpoint, token e CORS em **Configurações MCP** no LaunchScout.
+Para cadastrar um cliente MCP, use o endpoint acima e o token interno copiado na interface. O servidor oferece `initialize`, `ping`, `tools/list` e `tools/call`. As ferramentas disponíveis são:
 
-As fontes RSS locais e todos os agentes MCP habilitados são consultados na mesma pesquisa; os agentes MCP são chamados em paralelo e seus resultados são combinados com os RSS locais. Uma falha individual não descarta as respostas dos demais agentes.
+- `search_launches` e `discover_launches` para pesquisar o catálogo ou consultar os feeds habilitados.
+- `search_web` para executar a descoberta pelos provedores configurados.
+- `save_launch` e `get_launch_details` para guardar ou consultar lançamentos.
+- `get_platform_statistics`, `get_search_sources`, `get_connection_status`, `get_search_history`, `get_launch_categories` e `get_platform_configuration` para consultar o estado e os dados da plataforma.
+- `validate_launch` para validar campos de um lançamento sem o guardar.
 
-Se o arquivo `data/launchscout.json` estiver corrompido, o servidor preserva uma cópia com sufixo `.corrupt-*`, recria um armazenamento válido e permite gerar um novo token. Caso já exista um token e ele tenha sido perdido, informe o token atual ou faça a recuperação do arquivo de dados no servidor antes de gerar outro.
+Uma automação externa pode chamar `discover_launches` em uma agenda própria, usando, por exemplo, uma requisição MCP `tools/call`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "discover_launches",
+    "arguments": {}
+  }
+}
+```
+
+Envie esse corpo por `POST` ao endpoint MCP, com `Content-Type: application/json` e `Authorization: Bearer <token>`. A chamada consulta os feeds habilitados, atualiza os lançamentos encontrados e registra o histórico. A periodicidade, as notificações e as novas tentativas pertencem ao serviço externo de automação; o LaunchScout não cria nem executa agendas automaticamente. Sem fontes RSS ou agentes externos configurados, não haverá dados novos.
+
+## Dados, backups e segurança
+
+O armazenamento padrão fica em `data/launchscout.json`; o diretório pode ser movido com `LAUNCHSCOUT_DATA_DIR`. Faça backup dessa pasta e, se a chave não estiver definida no ambiente, inclua também `mcp-master.key`. Guarde `.env`, chaves, segredos e backups em local privado, nunca no diretório público do site.
+
+O catálogo, os favoritos, as contas, os provedores RSS, os registros de agentes da API e o histórico pertencem ao armazenamento backend. O navegador também mantém um cache do catálogo e configurações locais de conexões; os tokens dessas conexões ficam apenas em `sessionStorage` durante a sessão do navegador. Esses dados locais não são incluídos nos backups do servidor.
+
+As senhas de conta são guardadas com bcrypt. Sessões usam cookie HttpOnly; operações mutáveis autenticadas usam proteção CSRF. O token MCP não é retornado em buscas nem listado no painel: o token puro só é apresentado em fluxos autenticados de criação/recuperação. Publique somente com HTTPS, troque a password temporária de administrador e não compartilhe `MCP_MASTER_KEY`, `MCP_FIXED_TOKEN` ou `LAUNCHSCOUT_BOOTSTRAP_SECRET`.
+
+## Verificação local
+
+```bash
+npm ci
+npm test
+npm run build
+node --check server.js
+```
+
+Depois de iniciar o servidor, `GET /health` deve responder com JSON e `"runtime":"node"`. `npm run preview:static` é apenas para inspeção visual; não substitui esse teste nem executa a API.

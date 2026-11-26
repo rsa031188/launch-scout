@@ -1,5 +1,6 @@
 import './styles.css';
 import { collectAgentSearchResults } from './mcp-agents.js';
+import { safeWebUrl, summaryPreview } from './launch-utils.js';
 
 const icon = (name, size = 18) => {
   const paths = {
@@ -86,6 +87,9 @@ const activeConnection = () => activeConnections()[0] || state.config.connection
 state.launches = state.launches.filter((item) => !String(item.registration || '').includes('example.com') && item.source !== 'demo.launchscout');
 
 const app = document.querySelector('#app');
+app.addEventListener('error', (event) => {
+  if (event.target instanceof HTMLImageElement && event.target.matches('.launch-cover-image, .mini-cover-image')) event.target.remove();
+}, true);
 const saveState = () => {
   localStorage.setItem('launchscout-launches', JSON.stringify(state.launches));
   localStorage.setItem('launchscout-config', JSON.stringify({ ...state.config, connections: state.config.connections.map((connection) => ({ ...connection, token: '' })) }));
@@ -193,7 +197,8 @@ function renderHero() {
 }
 
 function renderLaunchCard(item) {
-  return `<article class="launch-card" data-id="${esc(item.id)}"><div class="launch-cover" style="--accent:${item.accent};background-image:linear-gradient(180deg,rgba(0,0,0,.02),rgba(5,7,10,.78)),url('${item.image}')"><div class="cover-top"><span class="type-pill">${esc(item.type)}</span><button class="save-button ${item.saved ? 'saved' : ''}" data-action="toggle-save" data-id="${esc(item.id)}" aria-label="${item.saved ? 'Remover dos salvos' : 'Salvar lançamento'}">${icon('bookmark', 17)}</button></div><div class="cover-date"><span>${relativeDate(item.date)}</span><strong>${formatDate(item.date, true)}</strong></div><div class="cover-accent"></div></div><div class="launch-card-body"><div class="producer-line"><span class="producer-avatar" style="--accent:${item.accent}">${esc(item.producer.split(' ').map((part) => part[0]).slice(0, 2).join(''))}</span><span>${esc(item.producer)}</span><span class="source-dot">·</span><span>${esc(item.sourceType)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><div class="card-tags">${item.tags.map((tag) => `<span>#${esc(tag)}</span>`).join('')}</div><div class="card-footer"><span class="discovered">Descoberto ${formatDate(item.discoveredAt, true)}</span><a href="${esc(item.registration)}" target="_blank" rel="noreferrer" class="register-link">Ver lançamento ${icon('arrow', 14)}</a></div></div></article>`;
+  const imageSrc = previewImageSrc(item);
+  return `<article class="launch-card" data-id="${esc(item.id)}"><div class="launch-cover" style="--accent:${item.accent}">${imageSrc ? `<img class="launch-cover-image" src="${esc(imageSrc)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : ''}<div class="cover-top"><span class="type-pill">${esc(item.type)}</span><button class="save-button ${item.saved ? 'saved' : ''}" data-action="toggle-save" data-id="${esc(item.id)}" aria-label="${item.saved ? 'Remover dos salvos' : 'Salvar lançamento'}">${icon('bookmark', 17)}</button></div><div class="cover-date"><span>${relativeDate(item.date)}</span><strong>${formatDate(item.date, true)}</strong></div><div class="cover-accent"></div></div><div class="launch-card-body"><div class="producer-line"><span class="producer-avatar" style="--accent:${item.accent}">${esc(item.producer.split(' ').map((part) => part[0]).slice(0, 2).join(''))}</span><span>${esc(item.producer)}</span><span class="source-dot">·</span><span>${esc(item.sourceType)}</span></div><h3>${esc(item.title)}</h3><p>${esc(summaryPreview(item.summary))}</p><div class="card-tags">${item.tags.map((tag) => `<span>#${esc(tag)}</span>`).join('')}</div><div class="card-footer"><span class="discovered">Descoberto ${formatDate(item.discoveredAt, true)}</span><a href="${esc(item.registration)}" target="_blank" rel="noreferrer" class="register-link">Ver lançamento ${icon('arrow', 14)}</a></div></div></article>`;
 }
 
 function renderFilters() {
@@ -221,7 +226,7 @@ function renderDashboard() {
   const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
   const categoryShare = topCategory ? Math.round((topCategory[1] / Math.max(1, state.launches.length)) * 100) : 0;
   const insight = topCategory ? `A categoria mais frequente é ${topCategory[0]}, com ${topCategory[1]} de ${state.launches.length} sinais (${categoryShare}%).` : 'Ainda não existem dados suficientes para gerar uma leitura do radar.';
-  return `${renderTopbar('Visão geral', 'SISTEMA DE DESCOBERTA')}${renderStats()}${renderHero()}<section class="dashboard-lower"><div class="mini-list"><div class="section-heading compact"><div><div class="eyebrow">PRÓXIMOS SINAIS</div><h2>Na sua linha de visão</h2></div><button class="text-button" data-view="catalog">Ver todos ${icon('arrow', 14)}</button></div>${featured.map((item) => `<button class="mini-launch" data-id="${esc(item.id)}" data-action="focus-card"><span class="mini-cover" style="background-image:url('${item.image || ''}')"></span><span class="mini-info"><strong>${esc(item.title)}</strong><small>${esc(item.producer)} · ${relativeDate(item.date)}</small></span><span class="mini-type">${esc(item.type)}</span>${icon('arrow', 15)}</button>`).join('')}</div><div class="insight-card"><div class="eyebrow lime">LEITURA DO RADAR · ${state.launches.length} SINAIS</div><h3>${esc(insight)}</h3><p>Leitura calculada a partir do catálogo sincronizado. Não é uma previsão; representa apenas a distribuição atual dos dados recebidos.</p><div class="insight-bars"><span style="height:${Math.max(8, categoryShare)}%"><i>${esc(topCategory?.[0] || 'SEM DADOS')}</i></span><span style="height:${Math.max(8, Math.round(state.launches.filter((item) => item.saved).length / Math.max(1, state.launches.length) * 100))}%"><i>SALVOS</i></span></div></div></section>`;
+  return `${renderTopbar('Visão geral', 'SISTEMA DE DESCOBERTA')}${renderStats()}${renderHero()}<section class="dashboard-lower"><div class="mini-list"><div class="section-heading compact"><div><div class="eyebrow">PRÓXIMOS SINAIS</div><h2>Na sua linha de visão</h2></div><button class="text-button" data-view="catalog">Ver todos ${icon('arrow', 14)}</button></div>${featured.map((item) => { const imageSrc = previewImageSrc(item); return `<button class="mini-launch" data-id="${esc(item.id)}" data-action="focus-card"><span class="mini-cover">${imageSrc ? `<img class="mini-cover-image" src="${esc(imageSrc)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : ''}</span><span class="mini-info"><strong>${esc(item.title)}</strong><small>${esc(item.producer)} · ${relativeDate(item.date)}</small></span><span class="mini-type">${esc(item.type)}</span>${icon('arrow', 15)}</button>`; }).join('')}</div><div class="insight-card"><div class="eyebrow lime">LEITURA DO RADAR · ${state.launches.length} SINAIS</div><h3>${esc(insight)}</h3><p>Leitura calculada a partir do catálogo sincronizado. Não é uma previsão; representa apenas a distribuição atual dos dados recebidos.</p><div class="insight-bars"><span style="height:${Math.max(8, categoryShare)}%"><i>${esc(topCategory?.[0] || 'SEM DADOS')}</i></span><span style="height:${Math.max(8, Math.round(state.launches.filter((item) => item.saved).length / Math.max(1, state.launches.length) * 100))}%"><i>SALVOS</i></span></div></div></section>`;
 }
 
 function renderSettingsModal() {
@@ -379,10 +384,17 @@ function normalizeMcpItem(raw, index, connection) {
   const rawType = String(raw.type || raw.product_type || raw.category || 'launch').toLowerCase();
   const type = rawType.includes('workshop') ? 'Workshop' : rawType.includes('summit') ? 'Virtual Summit' : rawType.includes('live') ? 'Free Live' : rawType.includes('product') || rawType.includes('saas') ? 'Produto' : 'Lançamento';
   const producer = raw.producer || raw.producer_name || raw.organizer || raw.creator || 'Fonte MCP';
-  const registration = raw.registration || raw.registration_url || raw.url || raw.link || raw.checkout_url || '#';
-  const image = raw.image || raw.image_url || raw.cover_image || raw.cover || '';
+  const registration = safeWebUrl(raw.registration || raw.registration_url || raw.url || raw.link || raw.checkout_url) || '#';
+  const image = safeWebUrl(raw.image || raw.image_url || raw.cover_image || raw.cover || '');
   const tags = Array.isArray(raw.tags) ? raw.tags.slice(0, 3) : [raw.category || 'Descoberta'];
   return { id: `mcp-${connection.id || endpointHost}-${raw.id || raw.slug || `${Date.now()}-${index}`}`, title, producer, type, date, discoveredAt: new Date().toISOString(), source: raw.source || endpointHost, sourceType: 'MCP / LaunchRadar', registration, image, accent: ['#8FEA64', '#72a4ff', '#ffbe5c', '#d18bff'][index % 4], summary: raw.summary || raw.description || raw.excerpt || 'Sinal recebido de uma fonte MCP conectada.', tags, saved: false, status: 'new' };
+}
+
+function previewImageSrc(item) {
+  const image = safeWebUrl(item.image);
+  if (image) return image;
+  const registration = safeWebUrl(item.registration);
+  return registration ? `/api/event-preview?url=${encodeURIComponent(registration)}` : '';
 }
 
 async function runDiscovery() {
