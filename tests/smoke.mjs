@@ -10,10 +10,17 @@ assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></
 
 const port = 3900 + Math.floor(Math.random() * 500);
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'launchscout-test-'));
-const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1', LAUNCHSCOUT_DATA_DIR: dataDir, MCP_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', LAUNCHSCOUT_DEFAULT_ADMIN: 'true' };
-const child = spawn(process.execPath, ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1', LAUNCHSCOUT_DATA_DIR: dataDir, MCP_MASTER_KEY: '', LAUNCHSCOUT_DEFAULT_ADMIN: 'true' };
+let child = spawn(process.execPath, ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 const base = `http://127.0.0.1:${port}`;
 let cookie = '';
+const stopServer = async () => {
+  if (!child || child.exitCode !== null) return;
+  await new Promise((resolve) => {
+    child.once('exit', resolve);
+    child.kill('SIGTERM');
+  });
+};
 const waitForServer = async () => { for (let attempt = 0; attempt < 60; attempt += 1) { try { const response = await fetch(`${base}/health`); if (response.ok) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error('server did not start'); };
 const request = async (url, options = {}) => { const response = await fetch(`${base}${url}`, { ...options, headers: { Accept: 'application/json', ...(options.headers || {}), ...(cookie ? { Cookie: cookie } : {}) } }); const setCookie = response.headers.get('set-cookie'); if (setCookie) cookie = setCookie.split(';')[0]; const body = await response.json(); return { response, body }; };
 try {
@@ -32,6 +39,14 @@ try {
   const generated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': restoredSession.body.csrfToken } });
   assert.equal(generated.response.status, 200);
   assert.match(generated.body.token, /^lr_[a-f0-9]{64}$/);
+  const masterKey = await fs.readFile(path.join(dataDir, 'mcp-master.key'));
+  assert.equal(masterKey.length, 32);
+  await stopServer();
+  child = spawn(process.execPath, ['server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  await waitForServer();
+  assert.deepEqual(await fs.readFile(path.join(dataDir, 'mcp-master.key')), masterKey);
+  const persistedTokenResponse = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${generated.body.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) });
+  assert.equal(persistedTokenResponse.response.status, 200);
   const firstToken = generated.body.token;
   const initialized = await request('/api/mcp', { method: 'POST', headers: { Authorization: `Bearer ${firstToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
   assert.equal(initialized.response.status, 200);
@@ -65,6 +80,6 @@ try {
   assert.equal(registeredLogin.response.status, 200);
   console.log('smoke tests passed');
 } finally {
-  child.kill('SIGTERM');
+  await stopServer();
   await fs.rm(dataDir, { recursive: true, force: true });
 }
