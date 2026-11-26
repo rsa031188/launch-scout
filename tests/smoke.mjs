@@ -4,10 +4,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { xmlValue } from '../src/feed-parser.js';
+import { extractPreviewImage, summaryPreview } from '../src/launch-utils.js';
 import { collectAgentSearchResults } from '../src/mcp-agents.js';
 
 assert.equal(xmlValue('<item><title lang="en">LaunchScout &amp; MCP</title></item>', 'title'), 'LaunchScout & MCP');
 assert.equal(xmlValue('<item><description><![CDATA[<p>Local <b>feed</b></p>]]></description></item>', 'description'), 'Local feed');
+assert.equal(summaryPreview('  A descrição   curta  '), 'A descrição curta');
+assert.equal([...summaryPreview('a'.repeat(205))].length, 200);
+assert.equal(summaryPreview('a'.repeat(205)).endsWith('…'), true);
+assert.equal(extractPreviewImage('<meta content="/images/event.png?x=1&amp;y=2" property="og:image">', 'https://events.example/page'), 'https://events.example/images/event.png?x=1&y=2');
 
 const queriedAgents = [];
 const agentSearch = await collectAgentSearchResults(
@@ -51,9 +56,14 @@ try {
   await waitForServer();
   const health = await request('/health');
   assert.equal(health.body.runtime, 'node');
+  const unauthenticatedPreview = await request(`/api/event-preview?url=${encodeURIComponent('https://events.example/page')}`);
+  assert.equal(unauthenticatedPreview.response.status, 401);
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'LaunchScout', password: 'Launch_admin' }) });
   assert.equal(login.response.status, 200);
   assert.ok(login.body.csrfToken);
+  const privatePreview = await request(`/api/event-preview?url=${encodeURIComponent('http://127.0.0.1/event')}`);
+  assert.equal(privatePreview.response.status, 400);
+  assert.equal(privatePreview.body.error.code, 'event_preview_url_rejected');
   const restoredSession = await request('/api/auth/me');
   assert.equal(restoredSession.response.status, 200);
   assert.equal(restoredSession.body.authenticated, true);

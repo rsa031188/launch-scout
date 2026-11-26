@@ -7,6 +7,7 @@ import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { xmlValue } from './src/feed-parser.js';
+import { extractPreviewImage, safeWebUrl } from './src/launch-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -20,6 +21,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const MAX_BODY = 1024 * 1024;
 const MAX_PROVIDER_IMPORT = 100;
 const rateBuckets = new Map();
+const eventPreviewCache = new Map();
 
 const now = () => new Date().toISOString();
 const text = (value, fallback = '') => String(value ?? fallback).trim().slice(0, 4000);
@@ -98,6 +100,59 @@ function rateLimit(req, res, key, limit = 20, windowMs = 60000) { const ip = Str
 async function readBody(req) { let size = 0; const chunks = []; for await (const chunk of req) { size += chunk.length; if (size > MAX_BODY) throw new Error('body_too_large'); chunks.push(chunk); } if (!chunks.length) return {}; return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
 function privateIp(address) { if (net.isIPv4(address)) { const parts = address.split('.').map(Number); return parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168); } const normalized = address.toLowerCase(); return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:') || normalized === '::'; }
 async function assertPublicUrl(value) { let parsed; try { parsed = new URL(String(value)); } catch { throw new Error('provider_url_invalid'); } if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('provider_url_invalid'); if (net.isIP(parsed.hostname) && privateIp(parsed.hostname)) throw new Error('provider_private_address'); if (parsed.port && !['80', '443', '8080', '8443'].includes(parsed.port)) throw new Error('provider_port_not_allowed'); const addresses = await dns.lookup(parsed.hostname, { all: true }); if (!addresses.length || addresses.some(({ address }) => privateIp(address))) throw new Error('provider_private_address'); return parsed.toString(); }
+async function readPreviewHtml(response) {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > 512_000) throw new Error('event_preview_too_large');
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 512_000) {
+        await reader.cancel().catch(() => {});
+        throw new Error('event_preview_too_large');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+async function fetchEventPreviewImage(value) {
+  const pageUrl = safeWebUrl(value);
+  if (!pageUrl) throw new Error('provider_url_invalid');
+  const cached = eventPreviewCache.get(pageUrl);
+  if (cached && cached.expiresAt > Date.now()) return cached.imageUrl;
+  if (cached) eventPreviewCache.delete(pageUrl);
+
+  const publicPageUrl = await assertPublicUrl(pageUrl);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(publicPageUrl, {
+      signal: controller.signal,
+      redirect: 'error',
+      headers: { Accept: 'text/html, application/xhtml+xml;q=0.9' }
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !/^(text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)) {
+      throw new Error('event_preview_unavailable');
+    }
+    const html = await readPreviewHtml(response);
+    const imageUrl = extractPreviewImage(html, publicPageUrl);
+    const publicImageUrl = imageUrl ? await assertPublicUrl(imageUrl) : '';
+    if (eventPreviewCache.size >= 500) eventPreviewCache.delete(eventPreviewCache.keys().next().value);
+    eventPreviewCache.set(pageUrl, { imageUrl: publicImageUrl, expiresAt: Date.now() + 60 * 60 * 1000 });
+    return publicImageUrl;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 function createProvider(input, publicUrl) { return { id: id(), name: text(input.name, 'Provedor RSS'), type: 'rss', url: publicUrl, category: text(input.category), language: text(input.language), enabled: input.enabled !== false, status: 'not_tested', createdAt: now(), lastSearchAt: '', lastError: '' }; }
 function providerImportError(error) { return ({ provider_url_invalid: 'URL inválida; use http ou https sem credenciais.', provider_private_address: 'A URL aponta para um endereço privado e não é permitida.', provider_port_not_allowed: 'A porta indicada não é permitida.' })[error.message] || 'A URL não pôde ser validada.'; }
 async function fetchProvider(provider) { const url = await assertPublicUrl(provider.url); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), Math.min(15000, Math.max(1000, Number(provider.timeoutMs || 10000)))); try { const response = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/plain;q=0.8' } }); if (!response.ok) throw new Error(`provider_http_${response.status}`); const body = await response.text(); if (body.length > 2_000_000) throw new Error('provider_response_too_large'); const blocks = [...body.matchAll(/<(?:item|entry)\b[\s\S]*?<\/(?:item|entry)>/gi)].map((match) => match[0]); return blocks.map((block, index) => { const title = xmlValue(block, 'title'); const linkMatch = block.match(/<link(?:\s+[^>]*)?>([\s\S]*?)<\/link>/i); const link = (linkMatch ? linkMatch[1] : '').replace(/<!\[CDATA\[|\]\]>/g, '').trim(); const date = xmlValue(block, 'pubDate') || xmlValue(block, 'published') || xmlValue(block, 'updated'); const summary = xmlValue(block, 'description') || xmlValue(block, 'summary') || xmlValue(block, 'content'); if (!title) return null; return normalizeLaunch({ title, summary, producer: provider.name, product_type: provider.category || 'Lançamento', event_date: date || '', registration_url: link || url, source: provider.name, category: provider.category || 'RSS', language: provider.language || '', verification: 'partial', discovered_at: now(), score: Math.max(1, 100 - index) }); }).filter(Boolean); } finally { clearTimeout(timeout); } }
@@ -159,6 +214,23 @@ const server = http.createServer(async (req, res) => { res.setHeader('X-Frame-Op
     if (pathname === '/api/auth/recover' && req.method === 'POST') { const auth = requireSession(req, res, store, 'admin'); if (!auth) return; const fixed = fixedMcpToken(); if (fixed) { if (fixed.length < 32) return error(res, 503, 'mcp_fixed_token_invalid', 'MCP_FIXED_TOKEN deve ter pelo menos 32 caracteres.'); return json(res, 200, { ok: true, token: fixed, fixed: true, replaced: false, warning: 'Token MCP fixo configurado no ambiente. Para o alterar, substitua MCP_FIXED_TOKEN e reinicie a aplicação.' }); } const token = `lr_${crypto.randomBytes(32).toString('hex')}`; const encrypted = encryptSecret(token); const timestamp = now(); store.mcp = { ...store.mcp, ...encrypted, hash: sha256(token), createdAt: store.mcp.createdAt || timestamp, rotatedAt: timestamp, revokedAt: '' }; audit(store, 'mcp_token_recovered', auth.user.id); writeStore(store); return json(res, 200, { ok: true, token, rotatedAt: timestamp, replaced: true, warning: 'Token recuperado e credencial anterior invalidada imediatamente.' }); }
     if (pathname === '/api/auth/revoke' && req.method === 'POST') { const auth = requireSession(req, res, store, 'admin'); if (!auth) return; if (fixedMcpToken()) return error(res, 409, 'mcp_fixed_token_configured', 'O token MCP é fixo e é gerido por MCP_FIXED_TOKEN. Altere a variável e reinicie a aplicação para o substituir.'); const timestamp = now(); store.mcp = { ciphertext: '', iv: '', authTag: '', hash: '', createdAt: store.mcp.createdAt, rotatedAt: store.mcp.rotatedAt, revokedAt: timestamp }; audit(store, 'mcp_token_revoked', auth.user.id); writeStore(store); return json(res, 200, { ok: true, revoked: true, revokedAt: timestamp }); }
     if (pathname === '/api/search/discover' && req.method === 'POST') { const auth = requireSession(req, res, store); if (!auth) return; const input = await readBody(req); const result = await discoverExternal(store, input || {}); return json(res, 200, { ok: true, ...result }); }
+    if (pathname === '/api/event-preview' && req.method === 'GET') {
+      const auth = requireSession(req, res, store);
+      if (!auth) return;
+      if (!rateLimit(req, res, 'event_preview', 120, 60000)) return;
+      const pageUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('url');
+      if (!pageUrl) return error(res, 400, 'event_preview_url_required', 'Informe a URL da página do evento.');
+      try {
+        const imageUrl = await fetchEventPreviewImage(pageUrl);
+        if (!imageUrl) return error(res, 404, 'event_preview_not_found', 'A página não disponibiliza uma imagem de pré-visualização.');
+        res.writeHead(302, { Location: imageUrl, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+        return res.end();
+      } catch (e) {
+        if (['provider_url_invalid', 'provider_private_address', 'provider_port_not_allowed'].includes(e.message)) return error(res, 400, 'event_preview_url_rejected', 'A URL da página ou da imagem não é permitida.');
+        if (e.message === 'event_preview_too_large') return error(res, 413, 'event_preview_too_large', 'A página excede o limite de tamanho para pré-visualização.');
+        return error(res, 502, 'event_preview_unavailable', 'Não foi possível carregar a pré-visualização desta página.');
+      }
+    }
     if (pathname === '/api/catalog' && req.method === 'GET') { const auth = requireSession(req, res, store); if (!auth) return; const result = searchLaunches(store, Object.fromEntries(new URL(req.url, `http://${req.headers.host}`).searchParams), auth.user.id); return json(res, 200, { ok: true, ...result }); }
     if (pathname === '/api/catalog' && req.method === 'POST') { const auth = requireSession(req, res, store); if (!auth) return; const input = await readBody(req); if (!text(input.title)) return error(res, 400, 'title_required', 'O título é obrigatório.'); const existing = input.id && store.launches.find((item) => item.id === text(input.id)); const item = normalizeLaunch(input, existing?.id || id()); if (existing) Object.assign(existing, item); else store.launches.unshift(item); audit(store, existing ? 'launch_updated' : 'launch_created', auth.user.id, { launchId: item.id }); writeStore(store); return json(res, existing ? 200 : 201, { ok: true, item: publicLaunch(item, auth.user.id, store) }); }
     const favoriteMatch = pathname.match(/^\/api\/catalog\/([^/]+)\/favorite$/);
