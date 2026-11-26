@@ -67,6 +67,32 @@ try {
   assert.equal(providerUpdated.response.status, 200);
   assert.equal(providerUpdated.body.provider.name, 'Feed atualizado');
   assert.equal(providerUpdated.body.provider.enabled, false);
+  const providerImport = await request('/api/admin/providers/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken },
+    body: JSON.stringify([
+      { name: 'Feed importado', url: 'https://example.com/feed.xml', category: 'Tecnologia', language: 'pt' },
+      { name: 'Feed privado', url: 'http://127.0.0.1/feed.xml' },
+      { url: 'https://example.com/missing-name.xml' }
+    ])
+  });
+  assert.equal(providerImport.response.status, 200);
+  assert.equal(providerImport.body.imported.length, 1);
+  assert.equal(providerImport.body.imported[0].name, 'Feed importado');
+  assert.deepEqual(providerImport.body.rejected.map(({ index }) => index), [2, 3]);
+  assert.match(providerImport.body.rejected[0].reason, /endereço privado/);
+  const providersAfterImport = await request('/api/admin/providers');
+  const importedProvider = providersAfterImport.body.providers.find(({ name }) => name === 'Feed importado');
+  assert.equal(importedProvider.url, 'https://example.com/feed.xml');
+  assert.equal(importedProvider.category, 'Tecnologia');
+  assert.equal(importedProvider.language, 'pt');
+  const malformedProviderImport = await request('/api/admin/providers/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': login.body.csrfToken },
+    body: JSON.stringify({ providers: [] })
+  });
+  assert.equal(malformedProviderImport.response.status, 400);
+  assert.equal(malformedProviderImport.body.error.code, 'invalid_provider_list');
   const generated = await request('/api/auth/generate', { method: 'POST', headers: { 'X-CSRF-Token': restoredSession.body.csrfToken } });
   assert.equal(generated.response.status, 200);
   assert.match(generated.body.token, /^lr_[a-f0-9]{64}$/);

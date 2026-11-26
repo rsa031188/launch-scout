@@ -41,6 +41,7 @@ const state = {
   editingConnectionId: 'primary',
   providers: [],
   editingProviderId: '',
+  providerImportFeedback: null,
   pendingToken: '',
   tokenGenerating: false,
   tokenNotice: '',
@@ -238,7 +239,17 @@ function renderSettingsModal() {
   const tokenNotice = isCore && state.tokenNotice ? `<div class="token-reveal"><strong>Novo token MCP — copie para o agente</strong><code>${esc(state.tokenNotice)}</code><button type="button" class="ghost-button" data-action="copy-token">Copiar token MCP</button><small>Não compartilhe a MCP_MASTER_KEY; o agente recebe apenas este token. O navegador mantém o token até você gerar outro ou revogá-lo.</small></div>` : '';
   const settingsForm = `<form class="settings-form" data-form="settings"><label>Nome do agente<input name="agentName" value="${esc(currentName)}" placeholder="Agente de descoberta" required /></label><label>Função do agente<input name="role" value="${esc(currentRole)}" placeholder="Catálogo, eventos, produtos..." required /></label><label>Endpoint MCP<input name="endpoint" value="${esc(currentEndpoint)}" placeholder="/api/mcp" required /></label><label>Token de acesso <span class="label-note">hash salvo no servidor; exibido apenas uma vez</span><input name="token" type="password" value="${esc(currentToken)}" placeholder="${isCore ? 'Gere um token abaixo' : 'Token do agente externo'}" autocomplete="off" />${tokenControls}</label>${adminRecovery}${tokenNotice}<div class="settings-note">${icon('link', 15)} <span>A busca chama <strong>todos os agentes habilitados em paralelo</strong>. O token interno é gerado por este Node e o endpoint padrão é <strong>/api/mcp</strong>.</span></div><div class="modal-actions"><button type="button" class="ghost-button" data-action="${editing ? 'close-settings' : 'cancel-new-connection'}">${editing ? 'Fechar' : 'Cancelar'}</button><button type="submit" class="primary-button">${icon('check', 15)} ${editing ? 'Salvar alterações' : 'Criar agente'}</button></div></form>`;
   const agentDialog = editing ? '' : `<div class="agent-dialog-backdrop" data-action="cancel-new-connection" data-stop-click="true"><section class="agent-dialog" role="dialog" aria-modal="true" aria-labelledby="new-agent-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">NOVA CONEXÃO MCP</div><h2 id="new-agent-title">Adicionar agente</h2><p>Informe o endpoint MCP e as credenciais do agente externo.</p></div><button type="button" class="icon-button" data-action="cancel-new-connection" aria-label="Cancelar">${icon('close')}</button></div>${settingsForm}</section></div>`;
-  return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="${editing ? 'true' : 'false'}" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="account-panel"><div class="list-heading"><span>Configurações da conta</span><span class="label-note">Sessão autenticada</span></div><div class="account-summary"><strong>${esc(state.auth.name || state.auth.email)}</strong><small>${esc(state.auth.email)} · ${esc(state.auth.role)}</small></div><form class="password-form" data-form="password"><label>Password atual<input name="currentPassword" type="password" autocomplete="current-password" required /></label><label>Nova password<input name="newPassword" type="password" autocomplete="new-password" minlength="12" required /><small>Use pelo menos 12 caracteres.</small></label><label>Confirmar nova password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="ghost-button" type="submit">Alterar password</button></form></div><div class="provider-panel"><div class="list-heading"><span>Pesquisa externa</span><span class="label-note">RSS público, validado contra SSRF</span></div><form class="provider-form" data-form="provider"><input name="name" placeholder="Nome da fonte" required /><input name="url" type="url" placeholder="https://exemplo.org/feed.xml" required /><button class="ghost-button" type="submit">Adicionar fonte</button></form><small class="provider-help">Sem provedor configurado, o radar não inventa resultados.</small></div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div>${editing ? settingsForm : ''}</section>${agentDialog}</div>`;
+  return `<div class="modal-backdrop" data-action="close-settings"><section class="settings-modal" role="dialog" aria-modal="${editing ? 'true' : 'false'}" aria-labelledby="settings-title" data-stop-click="true"><div class="modal-head"><div><div class="eyebrow lime">CONFIGURAÇÃO DO SCOUT</div><h2 id="settings-title">Conexões MCP</h2><p>O LaunchScout Core já possui MCP, persistência e token no mesmo servidor.</p></div><button class="icon-button" data-action="close-settings" aria-label="Fechar">${icon('close')}</button></div><div class="connection-list"><div class="list-heading"><span>Agentes configurados <b>${state.config.connections.length}</b></span><button type="button" class="text-button" data-action="new-connection">${icon('plus', 14)} Adicionar agente</button></div>${connections || '<div class="no-connections">Nenhuma fonte configurada ainda.</div>'}</div><div class="account-panel"><div class="list-heading"><span>Configurações da conta</span><span class="label-note">Sessão autenticada</span></div><div class="account-summary"><strong>${esc(state.auth.name || state.auth.email)}</strong><small>${esc(state.auth.email)} · ${esc(state.auth.role)}</small></div><form class="password-form" data-form="password"><label>Password atual<input name="currentPassword" type="password" autocomplete="current-password" required /></label><label>Nova password<input name="newPassword" type="password" autocomplete="new-password" minlength="12" required /><small>Use pelo menos 12 caracteres.</small></label><label>Confirmar nova password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="ghost-button" type="submit">Alterar password</button></form></div><div class="provider-panel"><div class="list-heading"><span>Pesquisa externa</span><span class="label-note">RSS público, validado contra SSRF</span></div><form class="provider-form" data-form="provider"><input name="name" placeholder="Nome da fonte" required /><input name="url" type="url" placeholder="https://exemplo.org/feed.xml" required /><button class="ghost-button" type="submit">Adicionar fonte</button></form><form class="provider-import-form" data-form="provider-import"><label for="provider-import-file">Importar lista JSON<input id="provider-import-file" name="file" type="file" accept=".json,application/json" required /></label><button class="ghost-button" type="submit">Importar fontes</button></form><small class="provider-help">Formato: array JSON com <code>name</code> e <code>url</code> (opcionais: <code>category</code>, <code>language</code>). Até 100 fontes por arquivo.</small>${renderProviderImportFeedback()}<small class="provider-help provider-empty-help">Sem provedor configurado, o radar não inventa resultados.</small></div><div class="connection-status ${currentConnected ? 'online' : 'offline'}"><span class="status-dot"></span><div><strong>${currentConnected ? 'Agente habilitado' : 'Agente pausado'}</strong><small>${esc(currentEndpoint || 'Preencha um endpoint MCP abaixo')}</small></div><button class="text-button" data-action="test-connection">Testar agora</button><button class="text-button" data-action="toggle-connection">${currentConnected ? 'Pausar' : 'Ativar'}</button></div>${editing ? settingsForm : ''}</section>${agentDialog}</div>`;
+}
+
+function renderProviderImportFeedback() {
+  const feedback = state.providerImportFeedback;
+  if (!feedback) return '';
+  if (feedback.message) return `<div class="provider-import-feedback error" role="alert">${esc(feedback.message)}</div>`;
+  const rejected = feedback.rejected || [];
+  const importedCount = (feedback.imported || []).length;
+  const summary = `${importedCount} ${importedCount === 1 ? 'fonte importada' : 'fontes importadas'}; ${rejected.length} ${rejected.length === 1 ? 'entrada rejeitada' : 'entradas rejeitadas'}.`;
+  return `<div class="provider-import-feedback ${rejected.length ? 'warning' : 'success'}" role="${rejected.length ? 'alert' : 'status'}"><strong>${summary}</strong>${rejected.length ? `<ul>${rejected.map((item) => `<li>Entrada ${item.index}: ${esc(item.reason)}</li>`).join('')}</ul>` : ''}</div>`;
 }
 
 function renderProviderManagement() {
@@ -264,7 +275,7 @@ function renderProviderManagement() {
     section.append(form);
   }
   panel.append(section);
-  const emptyHint = panel.querySelector('.provider-help');
+  const emptyHint = panel.querySelector('.provider-empty-help');
   if (emptyHint && state.providers.length) emptyHint.remove();
 }
 
@@ -574,6 +585,43 @@ app.addEventListener('submit', (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
     fetch('/api/admin/providers', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken }, body: JSON.stringify({ name: form.get('name'), url: form.get('url'), type: 'rss', enabled: true }) }).then(async (response) => { const payload = await parseJsonResponse(response); if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível adicionar a fonte.'); return payload; }).then(async () => { event.target.reset(); await loadExternalProviders(); toast('Fonte RSS adicionada. Execute uma nova busca para consultar dados reais.', 'success'); }).catch((error) => toast(`Fonte não adicionada: ${error.message}`));
+    return;
+  }
+  if (event.target.matches('[data-form="provider-import"]')) {
+    event.preventDefault();
+    const formElement = event.target;
+    const form = new FormData(formElement);
+    const file = form.get('file');
+    const submit = formElement.querySelector('button[type="submit"]');
+    if (submit) { submit.disabled = true; submit.textContent = 'A importar…'; }
+    state.providerImportFeedback = null;
+    (async () => {
+      try {
+        if (!(file instanceof File) || !file.size) throw new Error('Selecione um arquivo JSON.');
+        if (file.size > 1024 * 1024) throw new Error('O arquivo deve ter no máximo 1 MB.');
+        let providers;
+        try { providers = JSON.parse(await file.text()); } catch { throw new Error('O arquivo selecionado não contém JSON válido.'); }
+        if (!Array.isArray(providers) || providers.length === 0) throw new Error('O JSON deve ser um array com pelo menos uma fonte.');
+        if (providers.length > 100) throw new Error('Importe no máximo 100 fontes por arquivo.');
+        const response = await fetch('/api/admin/providers/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': state.csrfToken },
+          body: JSON.stringify(providers)
+        });
+        const payload = await parseJsonResponse(response);
+        if (!response.ok) throw new Error(payload.error?.message || 'Não foi possível importar as fontes.');
+        state.providerImportFeedback = { imported: payload.imported, rejected: payload.rejected };
+        formElement.reset();
+        await loadExternalProviders();
+        const importedCount = payload.imported.length;
+        toast(`${importedCount} ${importedCount === 1 ? 'fonte importada' : 'fontes importadas'}; ${payload.rejected.length} rejeitadas.`, importedCount && !payload.rejected.length ? 'success' : 'default');
+      } catch (error) {
+        state.providerImportFeedback = { message: error.message };
+        renderApp();
+      } finally {
+        if (submit?.isConnected) { submit.disabled = false; submit.textContent = 'Importar fontes'; }
+      }
+    })();
     return;
   }
   if (event.target.matches('[data-form="provider-edit"]')) {
